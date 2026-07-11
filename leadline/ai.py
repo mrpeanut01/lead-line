@@ -35,8 +35,14 @@ ARTICLE BODY:
 ---
 
 Return a JSON object with:
-- straight_headline: factual, declarative, <=12 words. State what happened. No teasers.
-- bluf_bullets: 3-5 bullets, each a complete sentence with the key facts.
+- straight_headline: factual, declarative, <=16 words. State what happened AND the most
+  important concrete detail: what the subject actually does, changes, decides, costs, or
+  affects. Never leave the subject generic ("a new bill", "a major policy", "a tech company")
+  when the body says specifically what it is or does. Example: not "New housing bill becomes
+  law" but "Housing bill limiting investor purchases and easing modular-home rules becomes law".
+  No teasers.
+- bluf_bullets: 3-5 bullets, each a complete sentence with the key facts. Do not repeat the
+  headline's detail verbatim; add specifics (numbers, names, dates, consequences).
 - one_sentence: the single most important fact in <=25 words.
 - topic_tags: up to 4 topic labels.
 - confidence: float 0-1 reflecting how well the body supports the summary.
