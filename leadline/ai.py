@@ -72,9 +72,9 @@ def _parse_summary(text):
 
 def call_ollama(prompt):
     resp = requests.post(
-        f"{config.OLLAMA_BASE_URL}/api/chat",
+        f"{config.setting('ollama_base_url').rstrip('/')}/api/chat",
         json={
-            "model": config.OLLAMA_MODEL,
+            "model": config.setting("ollama_model"),
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
             "format": SUMMARY_SCHEMA,
@@ -86,18 +86,19 @@ def call_ollama(prompt):
 
 
 def call_anthropic(prompt):
-    if not config.ANTHROPIC_API_KEY:
-        raise RuntimeError("ANTHROPIC_API_KEY not set")
+    api_key = config.setting("anthropic_api_key")
+    if not api_key:
+        raise RuntimeError("Anthropic API key not set")
     if store.anthropic_calls_today() >= config.MAX_ANTHROPIC_DAILY_ARTICLES:
         raise RuntimeError("daily Anthropic article cap reached")
     resp = requests.post(
         "https://api.anthropic.com/v1/messages",
         headers={
-            "x-api-key": config.ANTHROPIC_API_KEY,
+            "x-api-key": api_key,
             "anthropic-version": "2023-06-01",
         },
         json={
-            "model": config.ANTHROPIC_MODEL,
+            "model": config.setting("anthropic_model"),
             "max_tokens": 512,
             "messages": [{"role": "user", "content": prompt}],
         },
@@ -113,8 +114,8 @@ def summarize(article, source_name):
     prompt = build_prompt(article, source_name)
     errors = []
     for fn, provider, model in [
-        (call_ollama, "ollama", config.OLLAMA_MODEL),
-        (call_anthropic, "anthropic", config.ANTHROPIC_MODEL),
+        (call_ollama, "ollama", config.setting("ollama_model")),
+        (call_anthropic, "anthropic", config.setting("anthropic_model")),
     ]:
         try:
             return fn(prompt), provider, model

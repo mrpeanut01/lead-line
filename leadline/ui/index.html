@@ -191,6 +191,28 @@
   }
   #status-line { font-size: 13px; color: var(--color-text-muted); line-height: 1.6; }
   .close-row { margin-top: 32px; }
+
+  .setting-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .setting-row label { flex: 0 0 130px; font-size: 13px; color: var(--color-text-muted); }
+  .setting-row input {
+    flex: 1; padding: 9px 10px; border: 1px solid var(--color-divider);
+    border-radius: 6px; font-size: 13px; background: var(--color-card);
+    color: var(--color-text); min-width: 0;
+  }
+  .disc-btn {
+    flex: 0 0 auto; width: 32px; height: 32px; border: 1px solid var(--color-divider);
+    border-radius: 6px; background: var(--color-card); cursor: pointer;
+    color: var(--color-text-muted); font-size: 14px;
+  }
+  .disc-status { font-size: 12px; color: var(--color-text-faint);
+                 margin: -4px 0 10px 140px; min-height: 14px; }
+  .save-row { margin-top: 14px; }
+  .save-row .disc-status { margin: 0; }
+  #btn-save-settings {
+    padding: 9px 20px; border: 1px solid var(--color-divider); border-radius: 6px;
+    background: var(--color-card); cursor: pointer; font-size: 13px;
+    font-weight: 600; color: var(--color-text);
+  }
 </style>
 </head>
 <body>
@@ -207,6 +229,35 @@
 <div id="settings">
   <div class="inner">
     <h2>Sources &amp; Settings</h2>
+
+    <h3>AI Backends</h3>
+    <div class="setting-row">
+      <label for="set-ollama-url">Ollama server</label>
+      <input id="set-ollama-url" placeholder="http://localhost:11434" spellcheck="false">
+    </div>
+    <div class="setting-row">
+      <label for="set-ollama-model">Ollama model</label>
+      <input id="set-ollama-model" list="ollama-model-list" placeholder="e.g. llama3.2:3b" spellcheck="false">
+      <datalist id="ollama-model-list"></datalist>
+      <button class="disc-btn" id="btn-disc-ollama" title="Discover models on server">&#8635;</button>
+    </div>
+    <div class="disc-status" id="ollama-disc-status"></div>
+    <div class="setting-row">
+      <label for="set-anthropic-key">Anthropic API key</label>
+      <input id="set-anthropic-key" type="password" placeholder="sk-ant-…" spellcheck="false">
+    </div>
+    <div class="setting-row">
+      <label for="set-anthropic-model">Anthropic model</label>
+      <input id="set-anthropic-model" list="anthropic-model-list" placeholder="e.g. claude-haiku-4-5" spellcheck="false">
+      <datalist id="anthropic-model-list"></datalist>
+      <button class="disc-btn" id="btn-disc-anthropic" title="Discover models for key">&#8635;</button>
+    </div>
+    <div class="disc-status" id="anthropic-disc-status"></div>
+    <div class="setting-row save-row">
+      <button id="btn-save-settings">Save</button>
+      <span class="disc-status" id="settings-saved"></span>
+    </div>
+
     <h3>Status</h3>
     <div id="status-line">Loading…</div>
     <h3>Feed Sources</h3>
@@ -444,9 +495,65 @@ async function renderStatus() {
      Summaries by provider — ${prov}`;
 }
 
+/* AI backend settings */
+const $ = id => document.getElementById(id);
+
+function fillDatalist(listId, models) {
+  const dl = $(listId);
+  dl.innerHTML = "";
+  for (const m of models) {
+    const opt = document.createElement("option");
+    opt.value = m;
+    dl.appendChild(opt);
+  }
+}
+
+async function discoverOllama() {
+  $("ollama-disc-status").textContent = "Discovering models…";
+  const res = await api().discover_ollama_models($("set-ollama-url").value.trim() || null);
+  fillDatalist("ollama-model-list", res.models);
+  $("ollama-disc-status").textContent = res.error
+    ? res.error
+    : (res.models.length ? `${res.models.length} model(s) available` : "No models installed on server");
+}
+
+async function discoverAnthropic() {
+  $("anthropic-disc-status").textContent = "Discovering models…";
+  const res = await api().discover_anthropic_models($("set-anthropic-key").value.trim() || null);
+  fillDatalist("anthropic-model-list", res.models);
+  $("anthropic-disc-status").textContent = res.error
+    ? res.error
+    : `${res.models.length} model(s) available`;
+}
+
+async function loadSettings() {
+  const s = await api().get_settings();
+  $("set-ollama-url").value = s.ollama_base_url || "";
+  $("set-ollama-model").value = s.ollama_model || "";
+  $("set-anthropic-key").value = s.anthropic_api_key || "";
+  $("set-anthropic-model").value = s.anthropic_model || "";
+  $("settings-saved").textContent = "";
+  discoverOllama();
+  if (s.anthropic_api_key) discoverAnthropic();
+  else $("anthropic-disc-status").textContent = "";
+}
+
+$("btn-disc-ollama").onclick = discoverOllama;
+$("btn-disc-anthropic").onclick = discoverAnthropic;
+$("btn-save-settings").onclick = async () => {
+  await api().save_settings({
+    ollama_base_url: $("set-ollama-url").value.trim(),
+    ollama_model: $("set-ollama-model").value.trim(),
+    anthropic_api_key: $("set-anthropic-key").value.trim(),
+    anthropic_model: $("set-anthropic-model").value.trim(),
+  });
+  $("settings-saved").textContent = "Saved ✓";
+  setTimeout(() => { $("settings-saved").textContent = ""; }, 2500);
+};
+
 document.getElementById("btn-settings").onclick = () => {
   document.getElementById("settings").classList.add("open");
-  renderFeeds(); renderStatus();
+  loadSettings(); renderFeeds(); renderStatus();
 };
 document.getElementById("btn-close-settings").onclick = () =>
   document.getElementById("settings").classList.remove("open");

@@ -2,7 +2,9 @@
 import threading
 import webbrowser
 
-from . import ai, ingest, store
+import requests
+
+from . import ai, config, ingest, store
 
 
 class Api:
@@ -52,6 +54,43 @@ class Api:
     def set_feed_enabled(self, feed_id, enabled):
         store.set_feed_enabled(feed_id, enabled)
         return store.get_feeds()
+
+    # --- settings ---
+
+    def get_settings(self):
+        return config.load_settings()
+
+    def save_settings(self, updates):
+        return config.save_settings(updates)
+
+    def discover_ollama_models(self, base_url=None):
+        """List models available on the Ollama server (GET /api/tags)."""
+        url = (base_url or config.setting("ollama_base_url")).rstrip("/")
+        try:
+            resp = requests.get(f"{url}/api/tags", timeout=5)
+            resp.raise_for_status()
+            models = sorted(m["name"] for m in resp.json().get("models", []))
+            return {"models": models, "error": None}
+        except Exception:
+            return {"models": [], "error": f"Ollama unreachable at {url}"}
+
+    def discover_anthropic_models(self, api_key=None):
+        """List models available to the given Anthropic key (GET /v1/models)."""
+        key = api_key or config.setting("anthropic_api_key")
+        if not key:
+            return {"models": [], "error": "No API key set"}
+        try:
+            resp = requests.get(
+                "https://api.anthropic.com/v1/models?limit=100",
+                headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
+                timeout=10,
+            )
+            if resp.status_code == 401:
+                return {"models": [], "error": "Invalid API key"}
+            resp.raise_for_status()
+            return {"models": [m["id"] for m in resp.json().get("data", [])], "error": None}
+        except Exception as e:
+            return {"models": [], "error": f"Anthropic error: {type(e).__name__}"}
 
     # --- pipeline ---
 

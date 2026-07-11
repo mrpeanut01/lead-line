@@ -33,11 +33,25 @@ python3 -m venv .venv
 Without any configuration the app works immediately: stories appear with their original
 headlines, and BLUF summaries fill in as an AI backend becomes available.
 
+## Build the .app
+
+```bash
+.venv/bin/pip install pyinstaller
+./build_app.sh          # produces dist/LeadLine.app (ad-hoc signed)
+cp -R dist/LeadLine.app /Applications/
+```
+
 ## AI backends
 
-- **Ollama (primary):** install from <https://ollama.com>, then `ollama pull llama3.2:3b` and
-  set `OLLAMA_MODEL=llama3.2:3b` (default is `phi4:14b`).
-- **Anthropic (fallback):** set `ANTHROPIC_API_KEY`.
+Configure both backends in-app under **⚙ → AI Backends**: the Ollama server URL, the
+Anthropic API key, and the model for each — with one-click discovery of the models your
+Ollama server has installed and the models your Anthropic key can access. Settings persist
+to `~/Library/Application Support/LeadLine/settings.json` (mode 600) and take effect
+immediately; environment variables below act as defaults only.
+
+- **Ollama (primary):** install from <https://ollama.com>, then e.g. `ollama pull llama3.2:3b`
+  and pick it in settings.
+- **Anthropic (fallback):** paste an API key from <https://console.anthropic.com>.
 
 ## Configuration (environment variables)
 
