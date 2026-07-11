@@ -194,11 +194,12 @@
 
   .setting-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
   .setting-row label { flex: 0 0 130px; font-size: 13px; color: var(--color-text-muted); }
-  .setting-row input {
+  .setting-row input, .setting-row select {
     flex: 1; padding: 9px 10px; border: 1px solid var(--color-divider);
     border-radius: 6px; font-size: 13px; background: var(--color-card);
-    color: var(--color-text); min-width: 0;
+    color: var(--color-text); min-width: 0; height: 36px;
   }
+  .setting-row select:disabled { color: var(--color-text-faint); }
   .disc-btn {
     flex: 0 0 auto; width: 32px; height: 32px; border: 1px solid var(--color-divider);
     border-radius: 6px; background: var(--color-card); cursor: pointer;
@@ -237,8 +238,7 @@
     </div>
     <div class="setting-row">
       <label for="set-ollama-model">Ollama model</label>
-      <input id="set-ollama-model" list="ollama-model-list" placeholder="e.g. llama3.2:3b" spellcheck="false">
-      <datalist id="ollama-model-list"></datalist>
+      <select id="set-ollama-model" disabled></select>
       <button class="disc-btn" id="btn-disc-ollama" title="Discover models on server">&#8635;</button>
     </div>
     <div class="disc-status" id="ollama-disc-status"></div>
@@ -248,8 +248,7 @@
     </div>
     <div class="setting-row">
       <label for="set-anthropic-model">Anthropic model</label>
-      <input id="set-anthropic-model" list="anthropic-model-list" placeholder="e.g. claude-haiku-4-5" spellcheck="false">
-      <datalist id="anthropic-model-list"></datalist>
+      <select id="set-anthropic-model" disabled></select>
       <button class="disc-btn" id="btn-disc-anthropic" title="Discover models for key">&#8635;</button>
     </div>
     <div class="disc-status" id="anthropic-disc-status"></div>
@@ -498,20 +497,30 @@ async function renderStatus() {
 /* AI backend settings */
 const $ = id => document.getElementById(id);
 
-function fillDatalist(listId, models) {
-  const dl = $(listId);
-  dl.innerHTML = "";
+/* Model dropdowns stay blank/disabled until discovery returns; the saved
+   model is pre-selected when it is among the discovered ones. */
+function fillModelSelect(selectId, models) {
+  const sel = $(selectId);
+  const saved = sel.dataset.saved || "";
+  sel.innerHTML = "";
+  if (!models.length) { sel.disabled = true; return; }
+  const ph = document.createElement("option");
+  ph.value = ""; ph.textContent = "Select a model…"; ph.disabled = true;
+  sel.appendChild(ph);
   for (const m of models) {
     const opt = document.createElement("option");
-    opt.value = m;
-    dl.appendChild(opt);
+    opt.value = m; opt.textContent = m;
+    sel.appendChild(opt);
   }
+  sel.value = models.includes(saved) ? saved : "";
+  if (!sel.value) ph.selected = true;
+  sel.disabled = false;
 }
 
 async function discoverOllama() {
   $("ollama-disc-status").textContent = "Discovering models…";
   const res = await api().discover_ollama_models($("set-ollama-url").value.trim() || null);
-  fillDatalist("ollama-model-list", res.models);
+  fillModelSelect("set-ollama-model", res.models);
   $("ollama-disc-status").textContent = res.error
     ? res.error
     : (res.models.length ? `${res.models.length} model(s) available` : "No models installed on server");
@@ -520,7 +529,7 @@ async function discoverOllama() {
 async function discoverAnthropic() {
   $("anthropic-disc-status").textContent = "Discovering models…";
   const res = await api().discover_anthropic_models($("set-anthropic-key").value.trim() || null);
-  fillDatalist("anthropic-model-list", res.models);
+  fillModelSelect("set-anthropic-model", res.models);
   $("anthropic-disc-status").textContent = res.error
     ? res.error
     : `${res.models.length} model(s) available`;
@@ -529,9 +538,12 @@ async function discoverAnthropic() {
 async function loadSettings() {
   const s = await api().get_settings();
   $("set-ollama-url").value = s.ollama_base_url || "";
-  $("set-ollama-model").value = s.ollama_model || "";
   $("set-anthropic-key").value = s.anthropic_api_key || "";
-  $("set-anthropic-model").value = s.anthropic_model || "";
+  for (const [id, saved] of [["set-ollama-model", s.ollama_model],
+                             ["set-anthropic-model", s.anthropic_model]]) {
+    $(id).dataset.saved = saved || "";
+    $(id).innerHTML = ""; $(id).disabled = true;   // blank until discovered
+  }
   $("settings-saved").textContent = "";
   discoverOllama();
   if (s.anthropic_api_key) discoverAnthropic();
@@ -541,12 +553,16 @@ async function loadSettings() {
 $("btn-disc-ollama").onclick = discoverOllama;
 $("btn-disc-anthropic").onclick = discoverAnthropic;
 $("btn-save-settings").onclick = async () => {
-  await api().save_settings({
+  const updates = {
     ollama_base_url: $("set-ollama-url").value.trim(),
-    ollama_model: $("set-ollama-model").value.trim(),
     anthropic_api_key: $("set-anthropic-key").value.trim(),
-    anthropic_model: $("set-anthropic-model").value.trim(),
-  });
+  };
+  // Model dropdowns only overwrite the saved model when something is selected
+  for (const [id, key] of [["set-ollama-model", "ollama_model"],
+                           ["set-anthropic-model", "anthropic_model"]]) {
+    if ($(id).value) { updates[key] = $(id).value; $(id).dataset.saved = $(id).value; }
+  }
+  await api().save_settings(updates);
   $("settings-saved").textContent = "Saved ✓";
   setTimeout(() => { $("settings-saved").textContent = ""; }, 2500);
 };
