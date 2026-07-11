@@ -95,17 +95,14 @@
     border-radius: 4px; padding: 2px 7px; margin-bottom: 14px;
   }
 
-  /* collapsed original headline — visually subordinate by design (spec §3) */
-  .orig-toggle {
-    margin-top: 24px; font-size: 13px; color: var(--color-text-faint);
-    cursor: pointer; user-select: none; background: none; border: none;
-    font-family: var(--font-body); text-align: left; padding: 0;
+  /* original headline — always visible in the footer, visually subordinate
+     by design so the straight headline stays the primary read (spec §3) */
+  .orig-footer {
+    font-size: 13px; font-style: italic; color: var(--color-text-faint);
+    line-height: 1.5; padding-bottom: 14px;
   }
-  .orig-headline {
-    display: none; margin-top: 8px; font-size: 13px; font-style: italic;
-    color: var(--color-text-faint); line-height: 1.5;
-  }
-  .orig-headline.open { display: block; }
+  .orig-footer .orig-label { font-style: normal; font-variant: small-caps;
+                             letter-spacing: 0.04em; }
 
   .card-footer { margin-top: auto; padding-top: 24px; }
   .read-full {
@@ -349,12 +346,6 @@ function buildCard(a, index) {
     for (const b of a.bluf_bullets) ul.appendChild(el("li", "", esc(b)));
     inner.appendChild(ul);
 
-    // collapsed original headline toggle (spec §2/§3)
-    const toggle = el("button", "orig-toggle", "Original headline &#9662;");
-    const orig = el("div", "orig-headline", "&ldquo;" + esc(a.original_headline) + "&rdquo;");
-    toggle.onclick = () => orig.classList.toggle("open");
-    inner.appendChild(toggle);
-    inner.appendChild(orig);
   } else {
     // Phase 1 behavior: original headline while AI summary is pending
     inner.appendChild(el("h1", "headline original-style", esc(a.original_headline)));
@@ -364,6 +355,10 @@ function buildCard(a, index) {
   }
 
   const footer = el("div", "card-footer");
+  if (a.processed) {
+    footer.appendChild(el("div", "orig-footer",
+      `<span class="orig-label">Original headline</span> &nbsp;&ldquo;${esc(a.original_headline)}&rdquo;`));
+  }
   const readBtn = el("button", "read-full", "Read full article");
   readBtn.onclick = () => expandCard(card, a, readBtn);
   footer.appendChild(readBtn);
