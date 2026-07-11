@@ -181,7 +181,8 @@
   #add-feed input { flex: 1; padding: 9px 10px; border: 1px solid var(--color-divider);
                     border-radius: 6px; font-size: 13px; background: var(--color-card);
                     color: var(--color-text); }
-  #add-feed button, #settings .close-row button {
+  #catalog-row { margin-top: 14px; }
+  #catalog-row button, #add-feed button, #settings .close-row button {
     padding: 9px 16px; border: 1px solid var(--color-divider); border-radius: 6px;
     background: var(--color-card); cursor: pointer; font-size: 13px;
     color: var(--color-text);
@@ -274,6 +275,12 @@
     <div id="status-line">Loading…</div>
     <h3>Feed Sources</h3>
     <div id="feed-list"></div>
+    <div class="setting-row" id="catalog-row">
+      <select id="catalog-category"><option value="">Browse catalog…</option></select>
+      <select id="catalog-feed" disabled></select>
+      <button id="btn-add-catalog">Add</button>
+    </div>
+    <div class="disc-status" id="catalog-status"></div>
     <div id="add-feed">
       <input id="new-feed-name" placeholder="Name (e.g. Reuters)">
       <input id="new-feed-url" placeholder="RSS URL">
@@ -494,6 +501,7 @@ document.addEventListener("keydown", e => {
 /* settings */
 async function renderFeeds() {
   const feeds = await api().get_feeds();
+  existingFeedUrls = new Set(feeds.map(f => f.rss_url));
   const list = document.getElementById("feed-list");
   list.innerHTML = "";
   for (const f of feeds) {
@@ -623,10 +631,68 @@ $("btn-save-settings").onclick = async () => {
 
 document.getElementById("btn-settings").onclick = () => {
   document.getElementById("settings").classList.add("open");
-  loadSettings(); renderFeeds(); renderStatus();
+  loadSettings(); renderFeeds().then(loadCatalog); renderStatus();
 };
 document.getElementById("btn-close-settings").onclick = () =>
   document.getElementById("settings").classList.remove("open");
+/* feed catalog (bundled awesome-rss-feeds snapshot): category -> feed -> Add */
+let catalog = null;
+let existingFeedUrls = new Set();
+
+async function loadCatalog() {
+  if (!catalog) {
+    catalog = await api().get_catalog();
+    const sel = $("catalog-category");
+    for (const [label, groups] of [["Topics", catalog.topics],
+                                   ["Countries", catalog.countries]]) {
+      if (!groups.length) continue;
+      const og = document.createElement("optgroup");
+      og.label = label;
+      groups.forEach((g, i) => {
+        const opt = document.createElement("option");
+        opt.value = `${label}:${i}`;
+        opt.textContent = g.name;
+        og.appendChild(opt);
+      });
+      sel.appendChild(og);
+    }
+  }
+}
+
+function catalogGroup() {
+  const v = $("catalog-category").value;
+  if (!v) return null;
+  const [label, i] = v.split(":");
+  return (label === "Topics" ? catalog.topics : catalog.countries)[parseInt(i, 10)];
+}
+
+$("catalog-category").onchange = () => {
+  const sel = $("catalog-feed");
+  sel.innerHTML = "";
+  const group = catalogGroup();
+  if (!group) { sel.disabled = true; return; }
+  for (const f of group.feeds) {
+    if (existingFeedUrls.has(f.url)) continue;   // already in the library
+    const opt = document.createElement("option");
+    opt.value = f.url;
+    opt.textContent = f.name;
+    sel.appendChild(opt);
+  }
+  sel.disabled = sel.options.length === 0;
+  $("catalog-status").textContent = sel.disabled ? "All feeds in this category are already added" : "";
+};
+
+$("btn-add-catalog").onclick = async () => {
+  const group = catalogGroup();
+  const url = $("catalog-feed").value;
+  if (!group || !url) return;
+  const feed = group.feeds.find(f => f.url === url);
+  await api().add_feed(feed.name, feed.url);
+  await renderFeeds();
+  $("catalog-category").onchange();              // drop it from the picker
+  $("catalog-status").textContent = `Added ${feed.name} ✓`;
+};
+
 document.getElementById("btn-add-feed").onclick = async () => {
   const name = document.getElementById("new-feed-name").value.trim();
   const url = document.getElementById("new-feed-url").value.trim();

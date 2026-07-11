@@ -1,10 +1,18 @@
 """pywebview JS bridge — the UI's REST-equivalent surface."""
+import json
+import sys
 import threading
 import webbrowser
+from pathlib import Path
 
 import requests
 
 from . import ai, config, ingest, store
+
+if getattr(sys, "frozen", False):  # PyInstaller bundle
+    _UI_DIR = Path(sys._MEIPASS) / "leadline" / "ui"
+else:
+    _UI_DIR = Path(__file__).parent / "ui"
 
 
 class Api:
@@ -75,6 +83,13 @@ class Api:
     def set_feed_enabled(self, feed_id, enabled):
         store.set_feed_enabled(feed_id, enabled)
         return store.get_feeds()
+
+    def get_catalog(self):
+        """Bundled feed directory (plenaryapp/awesome-rss-feeds snapshot)."""
+        try:
+            return json.loads((_UI_DIR / "catalog.json").read_text())
+        except (OSError, ValueError):
+            return {"topics": [], "countries": []}
 
     # --- settings ---
 

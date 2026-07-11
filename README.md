@@ -101,8 +101,10 @@ window (0–10, default 1). Nothing is sent to a model before you're about to re
 | ⟳ | Poll feeds now |
 | ⚙ | Manage RSS sources, view provider stats |
 
-Default sources: NPR, PBS NewsHour, Ars Technica, The Verge, Wired — add or remove any RSS feed
-in ⚙.
+Default sources: NPR, PBS NewsHour, Ars Technica, The Verge, Wired. In ⚙ you can add any RSS
+URL directly, or browse the built-in catalog — a bundled snapshot of
+[awesome-rss-feeds](https://github.com/plenaryapp/awesome-rss-feeds) with ~800 curated feeds
+across 41 topics and 24 countries (regenerate with `scripts/build_catalog.py`).
 
 ## Contributing
 
