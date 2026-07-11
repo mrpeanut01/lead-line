@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>LeadLine</title>
+<style>
+  :root {
+    --color-surface: #faf7f2;        /* warm neutral, never pure white */
+    --color-card: #fffdf9;
+    --color-text: #1f1c18;
+    --color-text-muted: #6f675c;
+    --color-text-faint: #a39a8d;
+    --color-divider: #e6dfd4;
+    --color-accent-bar: #d8d2c6;
+    --font-display: ui-serif, "New York", Georgia, serif;
+    --font-body: -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: var(--color-surface); color: var(--color-text);
+               font-family: var(--font-body); overflow: hidden; }
+
+  /* ---- The Stack: vertical snap-scroll (spec §2, §8) ---- */
+  #stack {
+    height: 100vh;
+    overflow-y: scroll;
+    scroll-snap-type: y mandatory;
+    scrollbar-width: none;
+  }
+  #stack::-webkit-scrollbar { display: none; }
+
+  .card {
+    height: 100vh;
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    background: var(--color-card);
+    border-bottom: 1px solid var(--color-divider);
+    overflow: hidden;
+  }
+  .card.expanded { overflow-y: auto; }
+
+  /* subtle lead-image backdrop (spec §5.2), never obscuring text */
+  .card .backdrop {
+    position: absolute; inset: 0;
+    background-size: cover; background-position: center top;
+    opacity: 0.07; pointer-events: none;
+  }
+
+  /* 3px topic accent on the left edge (spec §3) */
+  .card .accent { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+
+  .card-inner {
+    position: relative;
+    max-width: 640px; width: 100%;
+    margin: 0 auto;
+    padding: 48px 36px 36px;
+    display: flex; flex-direction: column;
+    min-height: 100vh;
+  }
+
+  .source-bar {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 13px; color: var(--color-text-muted);
+    padding-bottom: 14px; border-bottom: 1px solid var(--color-divider);
+    margin-bottom: 28px;
+  }
+  .source-bar .source-name { font-weight: 600; }
+
+  .headline {
+    font-family: var(--font-display);
+    font-size: clamp(24px, 4.5vw, 32px);
+    line-height: 1.22; font-weight: 700;
+    margin-bottom: 22px;
+    text-wrap: balance;
+  }
+  .headline.original-style { font-weight: 600; color: var(--color-text-muted); }
+
+  .divider { width: 64px; border: none; border-top: 2px solid var(--color-divider);
+             margin: 0 0 22px; }
+
+  .bluf { list-style: none; }
+  .bluf li {
+    font-size: 16px; line-height: 1.7;
+    padding-left: 20px; position: relative; margin-bottom: 12px;
+  }
+  .bluf li::before { content: "•"; position: absolute; left: 2px; color: var(--color-text-faint); }
+
+  .pending-note { font-size: 14px; color: var(--color-text-faint); font-style: italic; }
+
+  .paywall-tag {
+    display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
+    color: var(--color-text-muted); border: 1px solid var(--color-divider);
+    border-radius: 4px; padding: 2px 7px; margin-bottom: 14px;
+  }
+
+  /* collapsed original headline — visually subordinate by design (spec §3) */
+  .orig-toggle {
+    margin-top: 24px; font-size: 13px; color: var(--color-text-faint);
+    cursor: pointer; user-select: none; background: none; border: none;
+    font-family: var(--font-body); text-align: left; padding: 0;
+  }
+  .orig-headline {
+    display: none; margin-top: 8px; font-size: 13px; font-style: italic;
+    color: var(--color-text-faint); line-height: 1.5;
+  }
+  .orig-headline.open { display: block; }
+
+  .card-footer { margin-top: auto; padding-top: 24px; }
+  .read-full {
+    display: block; width: 100%;
+    font-family: var(--font-body); font-size: 14px; font-weight: 600;
+    color: var(--color-text-muted); background: none;
+    border: 1px solid var(--color-divider); border-radius: 8px;
+    padding: 12px; cursor: pointer;
+  }
+  .read-full:hover { background: var(--color-surface); }
+
+  .swipe-hint {
+    text-align: center; font-size: 12px; color: var(--color-text-faint);
+    padding-top: 14px; transition: opacity 1s;
+  }
+  .swipe-hint.faded { opacity: 0; }
+
+  /* inline expanded reading mode (spec §2) */
+  .body-expand { display: none; padding-top: 28px; }
+  .card.expanded .body-expand { display: block; }
+  .body-expand p { font-size: 17px; line-height: 1.75; margin-bottom: 18px;
+                   font-family: var(--font-display); }
+  .body-expand .expand-actions { display: flex; gap: 12px; padding: 20px 0 40px; }
+  .expand-actions button, .expand-actions a {
+    font-family: var(--font-body); font-size: 14px; font-weight: 600;
+    color: var(--color-text-muted); background: none; text-decoration: none;
+    border: 1px solid var(--color-divider); border-radius: 8px;
+    padding: 10px 16px; cursor: pointer;
+  }
+
+  /* thin vertical progress bar, right edge — a queue, not pagination (spec §3) */
+  #progress-track {
+    position: fixed; right: 0; top: 0; bottom: 0; width: 3px;
+    background: var(--color-divider); z-index: 10;
+  }
+  #progress-fill { width: 100%; height: 0%; background: var(--color-text-muted);
+                   transition: height 0.25s; }
+
+  /* top chrome */
+  #chrome {
+    position: fixed; top: 12px; right: 16px; z-index: 20; display: flex; gap: 8px;
+  }
+  #chrome button {
+    font-size: 15px; background: var(--color-card); color: var(--color-text-muted);
+    border: 1px solid var(--color-divider); border-radius: 50%;
+    width: 34px; height: 34px; cursor: pointer;
+  }
+
+  .empty-state {
+    height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 12px;
+    color: var(--color-text-muted); scroll-snap-align: start;
+  }
+  .empty-state .big { font-family: var(--font-display); font-size: 24px;
+                      color: var(--color-text); }
+
+  /* settings overlay */
+  #settings {
+    display: none; position: fixed; inset: 0; z-index: 30;
+    background: var(--color-surface); overflow-y: auto;
+  }
+  #settings.open { display: block; }
+  #settings .inner { max-width: 640px; margin: 0 auto; padding: 48px 36px; }
+  #settings h2 { font-family: var(--font-display); margin-bottom: 24px; }
+  #settings h3 { font-size: 14px; margin: 28px 0 12px; color: var(--color-text-muted);
+                 text-transform: uppercase; letter-spacing: 0.05em; }
+  .feed-row { display: flex; align-items: center; gap: 10px; padding: 10px 0;
+              border-bottom: 1px solid var(--color-divider); font-size: 14px; }
+  .feed-row .feed-name { flex: 1; }
+  .feed-row .feed-url { color: var(--color-text-faint); font-size: 12px;
+                        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                        max-width: 220px; }
+  .feed-row button { background: none; border: none; cursor: pointer;
+                     color: var(--color-text-muted); font-size: 13px; }
+  #add-feed { display: flex; gap: 8px; margin-top: 14px; }
+  #add-feed input { flex: 1; padding: 9px 10px; border: 1px solid var(--color-divider);
+                    border-radius: 6px; font-size: 13px; background: var(--color-card);
+                    color: var(--color-text); }
+  #add-feed button, #settings .close-row button {
+    padding: 9px 16px; border: 1px solid var(--color-divider); border-radius: 6px;
+    background: var(--color-card); cursor: pointer; font-size: 13px;
+    color: var(--color-text);
+  }
+  #status-line { font-size: 13px; color: var(--color-text-muted); line-height: 1.6; }
+  .close-row { margin-top: 32px; }
+</style>
+</head>
+<body>
+
+<div id="progress-track"><div id="progress-fill"></div></div>
+
+<div id="chrome">
+  <button id="btn-refresh" title="Refresh feeds">&#8635;</button>
+  <button id="btn-settings" title="Sources &amp; settings">&#9881;</button>
+</div>
+
+<div id="stack"></div>
+
+<div id="settings">
+  <div class="inner">
+    <h2>Sources &amp; Settings</h2>
+    <h3>Status</h3>
+    <div id="status-line">Loading…</div>
+    <h3>Feed Sources</h3>
+    <div id="feed-list"></div>
+    <div id="add-feed">
+      <input id="new-feed-name" placeholder="Name (e.g. Reuters)">
+      <input id="new-feed-url" placeholder="RSS URL">
+      <button id="btn-add-feed">Add</button>
+    </div>
+    <div class="close-row"><button id="btn-close-settings">Done</button></div>
+  </div>
+</div>
+
+<script>
+const ACCENT_PALETTE = ["#b0785c","#7c8f6d","#6d7f8f","#8f6d85","#a08f5c","#5c8f88","#8a7ca8"];
+let cards = [];            // ordered article objects currently in the stack
+let maxSeenIndex = 0;
+let hintFaded = false;
+
+const api = () => window.pywebview.api;
+const el = (tag, cls, html) => {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (html !== undefined) n.innerHTML = html;
+  return n;
+};
+const esc = s => (s || "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function timeAgo(iso) {
+  if (!iso) return "";
+  const mins = Math.max(0, Math.round((Date.now() - new Date(iso)) / 60000));
+  if (mins < 60) return mins + "m ago";
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return hrs + "h ago";
+  return Math.round(hrs / 24) + "d ago";
+}
+
+function accentColor(tags) {
+  if (!tags || !tags.length) return "var(--color-accent-bar)";
+  let h = 0;
+  for (const ch of tags[0]) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return ACCENT_PALETTE[h % ACCENT_PALETTE.length];
+}
+
+function buildCard(a, index) {
+  const card = el("section", "card");
+  card.dataset.id = a.id;
+  card.dataset.index = index;
+
+  if (a.card_image_url) {
+    const bd = el("div", "backdrop");
+    bd.style.backgroundImage = `url("${encodeURI(a.card_image_url)}")`;
+    card.appendChild(bd);
+  }
+  const accent = el("div", "accent");
+  accent.style.background = accentColor(a.topic_tags);
+  card.appendChild(accent);
+
+  const inner = el("div", "card-inner");
+
+  const topic = a.topic_tags && a.topic_tags.length ? esc(a.topic_tags[0]) + " &nbsp;·&nbsp; " : "";
+  inner.appendChild(el("div", "source-bar",
+    `<span class="source-name">${esc(a.source_name || "Unknown source")}</span>
+     <span>${topic}${timeAgo(a.pub_date)}</span>`));
+
+  if (a.is_paywalled) inner.appendChild(el("span", "paywall-tag", "PAYWALLED"));
+
+  if (a.processed) {
+    inner.appendChild(el("h1", "headline", esc(a.straight_headline)));
+    inner.appendChild(el("hr", "divider"));
+    const ul = el("ul", "bluf");
+    for (const b of a.bluf_bullets) ul.appendChild(el("li", "", esc(b)));
+    inner.appendChild(ul);
+
+    // collapsed original headline toggle (spec §2/§3)
+    const toggle = el("button", "orig-toggle", "Original headline &#9662;");
+    const orig = el("div", "orig-headline", "&ldquo;" + esc(a.original_headline) + "&rdquo;");
+    toggle.onclick = () => orig.classList.toggle("open");
+    inner.appendChild(toggle);
+    inner.appendChild(orig);
+  } else {
+    // Phase 1 behavior: original headline while AI summary is pending
+    inner.appendChild(el("h1", "headline original-style", esc(a.original_headline)));
+    inner.appendChild(el("hr", "divider"));
+    inner.appendChild(el("p", "pending-note",
+      a.rss_description ? esc(a.rss_description.slice(0, 300)) : "Summary pending…"));
+  }
+
+  const footer = el("div", "card-footer");
+  const readBtn = el("button", "read-full", "Read full article");
+  readBtn.onclick = () => expandCard(card, a, readBtn);
+  footer.appendChild(readBtn);
+
+  const expand = el("div", "body-expand");
+  footer.appendChild(expand);
+
+  if (index === 0 && !hintFaded) {
+    footer.appendChild(el("div", "swipe-hint", "&#8593; scroll for next story"));
+  }
+  inner.appendChild(footer);
+  card.appendChild(inner);
+  return card;
+}
+
+async function expandCard(card, a, btn) {
+  if (card.classList.contains("expanded")) return;
+  btn.disabled = true; btn.textContent = "Loading…";
+  const res = await api().get_body(a.id);
+  const expand = card.querySelector(".body-expand");
+  expand.innerHTML = "";
+  const paras = (res.body || "").split(/\n\n+/).filter(p => p.trim());
+  if (!paras.length) {
+    expand.appendChild(el("p", "", "<em>Full text unavailable — open the source below.</em>"));
+  }
+  for (const p of paras) expand.appendChild(el("p", "", esc(p)));
+
+  const actions = el("div", "expand-actions");
+  const collapse = el("button", "", "Collapse &#9652;");
+  collapse.onclick = () => {
+    card.classList.remove("expanded");
+    card.scrollTop = 0;
+    btn.style.display = "";
+  };
+  const src = el("a", "", "Source &#8599;");
+  src.href = "#";
+  src.onclick = (e) => { e.preventDefault(); api().open_source(a.canonical_url); };
+  actions.appendChild(collapse);
+  actions.appendChild(src);
+  expand.appendChild(actions);
+
+  btn.disabled = false; btn.textContent = "Read full article";
+  btn.style.display = "none";
+  card.classList.add("expanded");
+}
+
+/* track the active card; advancing past a card marks it read (spec §4.3) */
+const observer = new IntersectionObserver(entries => {
+  for (const e of entries) {
+    if (!e.isIntersecting) continue;
+    const idx = parseInt(e.target.dataset.index, 10);
+    updateProgress(idx);
+    if (idx > 0 && !hintFaded) {
+      hintFaded = true;
+      document.querySelectorAll(".swipe-hint").forEach(h => h.classList.add("faded"));
+    }
+    if (idx > maxSeenIndex) {
+      for (let i = maxSeenIndex; i < idx; i++) {
+        if (cards[i] && !cards[i]._read) { cards[i]._read = true; api().mark_read(cards[i].id); }
+      }
+      maxSeenIndex = idx;
+    }
+  }
+}, { root: null, threshold: 0.6 });
+
+function updateProgress(idx) {
+  const pct = cards.length ? ((idx + 1) / cards.length) * 100 : 0;
+  document.getElementById("progress-fill").style.height = pct + "%";
+}
+
+function renderStack(list) {
+  const stack = document.getElementById("stack");
+  stack.innerHTML = "";
+  cards = list;
+  maxSeenIndex = 0;
+  if (!list.length) {
+    stack.appendChild(el("div", "empty-state",
+      `<div class="big">You're all caught up</div>
+       <div>Pull new stories with &#8635; or add sources in &#9881;</div>`));
+    updateProgress(0);
+    return;
+  }
+  list.forEach((a, i) => {
+    const c = buildCard(a, i);
+    stack.appendChild(c);
+    observer.observe(c);
+  });
+  updateProgress(0);
+}
+
+/* swap in AI summaries as the background pipeline finishes them */
+async function refreshSummariesInPlace() {
+  const latest = await api().get_queue(100);
+  const byId = Object.fromEntries(latest.map(a => [a.id, a]));
+  document.querySelectorAll(".card").forEach(cardEl => {
+    const idx = parseInt(cardEl.dataset.index, 10);
+    const current = cards[idx];
+    const updated = byId[cardEl.dataset.id];
+    if (current && updated && !current.processed && updated.processed) {
+      cards[idx] = Object.assign(updated, { _read: current._read });
+      const fresh = buildCard(cards[idx], idx);
+      observer.unobserve(cardEl);
+      cardEl.replaceWith(fresh);
+      observer.observe(fresh);
+    }
+  });
+}
+
+/* keyboard: arrows / space advance the stack */
+document.addEventListener("keydown", e => {
+  const stack = document.getElementById("stack");
+  if (document.getElementById("settings").classList.contains("open")) return;
+  if (["ArrowDown", " ", "PageDown", "j"].includes(e.key)) {
+    e.preventDefault(); stack.scrollBy({ top: window.innerHeight, behavior: "smooth" });
+  } else if (["ArrowUp", "PageUp", "k"].includes(e.key)) {
+    e.preventDefault(); stack.scrollBy({ top: -window.innerHeight, behavior: "smooth" });
+  }
+});
+
+/* settings */
+async function renderFeeds() {
+  const feeds = await api().get_feeds();
+  const list = document.getElementById("feed-list");
+  list.innerHTML = "";
+  for (const f of feeds) {
+    const row = el("div", "feed-row");
+    const cb = el("input");
+    cb.type = "checkbox"; cb.checked = !!f.enabled;
+    cb.onchange = () => api().set_feed_enabled(f.id, cb.checked);
+    const rm = el("button", "", "Remove");
+    rm.onclick = async () => { await api().remove_feed(f.id); renderFeeds(); };
+    row.appendChild(cb);
+    row.appendChild(el("span", "feed-name", esc(f.name)));
+    row.appendChild(el("span", "feed-url", esc(f.rss_url)));
+    row.appendChild(rm);
+    list.appendChild(row);
+  }
+}
+
+async function renderStatus() {
+  const s = await api().get_status();
+  const prov = Object.entries(s.by_provider || {})
+    .map(([p, n]) => `${p}: ${n}`).join(" &nbsp;·&nbsp; ") || "none yet";
+  document.getElementById("status-line").innerHTML =
+    `${s.unread} unread (${s.processed_unread} summarized) &nbsp;·&nbsp; ${s.total} total<br>
+     Summaries by provider — ${prov}`;
+}
+
+document.getElementById("btn-settings").onclick = () => {
+  document.getElementById("settings").classList.add("open");
+  renderFeeds(); renderStatus();
+};
+document.getElementById("btn-close-settings").onclick = () =>
+  document.getElementById("settings").classList.remove("open");
+document.getElementById("btn-add-feed").onclick = async () => {
+  const name = document.getElementById("new-feed-name").value.trim();
+  const url = document.getElementById("new-feed-url").value.trim();
+  if (!name || !url) return;
+  await api().add_feed(name, url);
+  document.getElementById("new-feed-name").value = "";
+  document.getElementById("new-feed-url").value = "";
+  renderFeeds();
+};
+document.getElementById("btn-refresh").onclick = async () => {
+  const btn = document.getElementById("btn-refresh");
+  btn.disabled = true;
+  await api().refresh();
+  renderStack(await api().get_queue(100));
+  btn.disabled = false;
+};
+
+async function init() {
+  renderStack(await api().get_queue(100));
+  setInterval(refreshSummariesInPlace, 20000);
+}
+window.addEventListener("pywebviewready", init);
+</script>
+</body>
+</html>
