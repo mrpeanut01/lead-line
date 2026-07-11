@@ -6,7 +6,22 @@ An anti-clickbait, BLUF-first news reader for the Mac — a straightforward impl
 Every story is shown one at a time in a full-window **vertical snap-scroll stack**: an
 AI-rewritten straight headline plus 3–5 Bottom-Line-Up-Front bullets, always above the fold.
 Scroll down for the next story. Tap **Read full article** to expand the extracted body inline;
-**Source ↗** opens the publisher in your browser.
+**Source ↗** opens the publisher in your browser. The publisher's original headline stays
+visible (subordinate, in the card footer) for transparency.
+
+Privacy-first by design: everything runs locally in a single process. No accounts, no
+telemetry, no cloud backend — article text goes only to the AI server *you* configure
+(your own Ollama, or Anthropic with your key), and only for the story you're reading plus
+a small read-ahead window.
+
+## Install
+
+Download `LeadLine-<version>.zip` from [Releases](https://github.com/mrpeanut01/LeadLine/releases),
+unzip, and drag `LeadLine.app` to Applications.
+
+> **Gatekeeper note:** the app is ad-hoc signed (not notarized), so on first launch macOS
+> will warn you. Right-click the app → **Open** → **Open**, or clear the quarantine flag:
+> `xattr -dr com.apple.quarantine /Applications/LeadLine.app`.
 
 ## Architecture
 
@@ -22,7 +37,7 @@ Single-process Python desktop app in a native macOS window (pywebview / WKWebVie
 
 Only summaries and headlines persist long-term — extracted body text is transient (spec §12).
 
-## Run
+## Run from source
 
 ```bash
 python3 -m venv .venv
@@ -37,7 +52,7 @@ headlines, and BLUF summaries fill in as an AI backend becomes available.
 
 ```bash
 .venv/bin/pip install pyinstaller
-./build_app.sh          # produces dist/LeadLine.app (ad-hoc signed)
+./build_app.sh          # produces dist/LeadLine.app (ad-hoc signed, versioned)
 cp -R dist/LeadLine.app /Applications/
 ```
 
@@ -88,3 +103,14 @@ window (0–10, default 1). Nothing is sent to a model before you're about to re
 
 Default sources: NPR, PBS NewsHour, Ars Technica, The Verge, Wired — add or remove any RSS feed
 in ⚙.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, architecture, and PR guidelines.
+
+## Rights & attribution
+
+LeadLine is a personal reader built to be conservative about publisher content: bodies are
+extracted transiently for summarization and TTL-purged within 24 hours, robots.txt is
+respected, every card attributes and links to the publisher, and only AI-generated summaries
+persist. See the spec's legal considerations before deploying beyond personal use.
