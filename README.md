@@ -45,13 +45,18 @@ cp -R dist/LeadLine.app /Applications/
 
 Configure both backends in-app under **⚙ → AI Backends**: the Ollama server URL, the
 Anthropic API key, and the model for each — with one-click discovery of the models your
-Ollama server has installed and the models your Anthropic key can access. Settings persist
-to `~/Library/Application Support/LeadLine/settings.json` (mode 600) and take effect
+Ollama server has installed and the models your Anthropic key can access. Each server has a
+role — **Primary**, **Secondary**, or **Off** — and the router tries them in that order
+(promoting one to Primary demotes the other). Settings persist to
+`~/Library/Application Support/LeadLine/settings.json` (mode 600) and take effect
 immediately; environment variables below act as defaults only.
 
-- **Ollama (primary):** install from <https://ollama.com>, then e.g. `ollama pull llama3.2:3b`
+- **Ollama:** install from <https://ollama.com>, then e.g. `ollama pull llama3.2:3b`
   and pick it in settings.
-- **Anthropic (fallback):** paste an API key from <https://console.anthropic.com>.
+- **Anthropic:** paste an API key from <https://console.anthropic.com>.
+
+Stories are summarized **on demand only** — the story on screen plus the **Read ahead**
+window (0–10, default 1). Nothing is sent to a model before you're about to read it.
 
 ## Configuration (environment variables)
 
@@ -60,8 +65,11 @@ immediately; environment variables below act as defaults only.
 | `OLLAMA_BASE_URL` | `http://localhost:11434` |
 | `OLLAMA_MODEL` | `phi4:14b` |
 | `OLLAMA_TIMEOUT_SECONDS` | `8` |
+| `OLLAMA_ROLE` | `primary` |
 | `ANTHROPIC_API_KEY` | (unset — fallback disabled) |
 | `ANTHROPIC_MODEL` | `claude-haiku-4-5` |
+| `ANTHROPIC_ROLE` | `secondary` |
+| `READ_AHEAD` | `1` |
 | `MAX_ANTHROPIC_DAILY_ARTICLES` | `2000` |
 | `POLL_INTERVAL_MINUTES` | `15` |
 | `BODY_TEXT_CACHE_TTL_HOURS` | `24` |

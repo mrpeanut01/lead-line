@@ -149,12 +149,6 @@ def save_extraction(article_id, body_text, is_paywalled, card_image_url):
     )
 
 
-def articles_needing_ai(limit=10):
-    return query(
-        "SELECT * FROM articles WHERE processed = 0 AND extracted_at IS NOT NULL "
-        "AND is_read = 0 ORDER BY pub_date DESC LIMIT ?", (limit,))
-
-
 def save_summary(article_id, summary, provider, model):
     execute(
         """UPDATE articles SET straight_headline = ?, bluf_bullets = ?, one_sentence = ?,

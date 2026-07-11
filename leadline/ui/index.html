@@ -200,6 +200,7 @@
     color: var(--color-text); min-width: 0; height: 36px;
   }
   .setting-row select:disabled { color: var(--color-text-faint); }
+  .setting-row .role-select { flex: 0 0 110px; }
   .disc-btn {
     flex: 0 0 auto; width: 32px; height: 32px; border: 1px solid var(--color-divider);
     border-radius: 6px; background: var(--color-card); cursor: pointer;
@@ -235,6 +236,11 @@
     <div class="setting-row">
       <label for="set-ollama-url">Ollama server</label>
       <input id="set-ollama-url" placeholder="http://localhost:11434" spellcheck="false">
+      <select id="set-ollama-role" class="role-select">
+        <option value="primary">Primary</option>
+        <option value="secondary">Secondary</option>
+        <option value="off">Off</option>
+      </select>
     </div>
     <div class="setting-row">
       <label for="set-ollama-model">Ollama model</label>
@@ -245,6 +251,11 @@
     <div class="setting-row">
       <label for="set-anthropic-key">Anthropic API key</label>
       <input id="set-anthropic-key" type="password" placeholder="sk-ant-…" spellcheck="false">
+      <select id="set-anthropic-role" class="role-select">
+        <option value="primary">Primary</option>
+        <option value="secondary">Secondary</option>
+        <option value="off">Off</option>
+      </select>
     </div>
     <div class="setting-row">
       <label for="set-anthropic-model">Anthropic model</label>
@@ -252,6 +263,11 @@
       <button class="disc-btn" id="btn-disc-anthropic" title="Discover models for key">&#8635;</button>
     </div>
     <div class="disc-status" id="anthropic-disc-status"></div>
+    <div class="setting-row">
+      <label for="set-read-ahead">Read ahead</label>
+      <select id="set-read-ahead"></select>
+    </div>
+    <div class="disc-status">Stories summarized in advance beyond the one on screen</div>
     <div class="setting-row save-row">
       <button id="btn-save-settings">Save</button>
       <span class="disc-status" id="settings-saved"></span>
@@ -274,6 +290,8 @@
 const ACCENT_PALETTE = ["#b0785c","#7c8f6d","#6d7f8f","#8f6d85","#a08f5c","#5c8f88","#8a7ca8"];
 let cards = [];            // ordered article objects currently in the stack
 let maxSeenIndex = 0;
+let currentIndex = 0;
+let readAhead = 1;         // stories beyond the current card to summarize
 let hintFaded = false;
 
 const api = () => window.pywebview.api;
@@ -392,12 +410,23 @@ async function expandCard(card, a, btn) {
   card.classList.add("expanded");
 }
 
+/* summarize on demand: only the on-screen story plus the read-ahead window */
+function ensureSummaries(idx) {
+  const ids = [];
+  for (const c of cards.slice(idx, idx + readAhead + 1)) {
+    if (c && !c.processed && !c._requested) { c._requested = true; ids.push(c.id); }
+  }
+  if (ids.length) api().request_summaries(ids);
+}
+
 /* track the active card; advancing past a card marks it read (spec §4.3) */
 const observer = new IntersectionObserver(entries => {
   for (const e of entries) {
     if (!e.isIntersecting) continue;
     const idx = parseInt(e.target.dataset.index, 10);
+    currentIndex = idx;
     updateProgress(idx);
+    ensureSummaries(idx);
     if (idx > 0 && !hintFaded) {
       hintFaded = true;
       document.querySelectorAll(".swipe-hint").forEach(h => h.classList.add("faded"));
@@ -421,6 +450,7 @@ function renderStack(list) {
   stack.innerHTML = "";
   cards = list;
   maxSeenIndex = 0;
+  currentIndex = 0;
   if (!list.length) {
     stack.appendChild(el("div", "empty-state",
       `<div class="big">You're all caught up</div>
@@ -434,6 +464,7 @@ function renderStack(list) {
     observer.observe(c);
   });
   updateProgress(0);
+  ensureSummaries(0);
 }
 
 /* swap in AI summaries as the background pipeline finishes them */
@@ -445,7 +476,7 @@ async function refreshSummariesInPlace() {
     const current = cards[idx];
     const updated = byId[cardEl.dataset.id];
     if (current && updated && !current.processed && updated.processed) {
-      cards[idx] = Object.assign(updated, { _read: current._read });
+      cards[idx] = Object.assign(updated, { _read: current._read, _requested: current._requested });
       const fresh = buildCard(cards[idx], idx);
       observer.unobserve(cardEl);
       cardEl.replaceWith(fresh);
@@ -539,6 +570,9 @@ async function loadSettings() {
   const s = await api().get_settings();
   $("set-ollama-url").value = s.ollama_base_url || "";
   $("set-anthropic-key").value = s.anthropic_api_key || "";
+  $("set-ollama-role").value = s.ollama_role || "primary";
+  $("set-anthropic-role").value = s.anthropic_role || "secondary";
+  $("set-read-ahead").value = String(s.read_ahead ?? 1);
   for (const [id, saved] of [["set-ollama-model", s.ollama_model],
                              ["set-anthropic-model", s.anthropic_model]]) {
     $(id).dataset.saved = saved || "";
@@ -550,12 +584,33 @@ async function loadSettings() {
   else $("anthropic-disc-status").textContent = "";
 }
 
+/* only one server can be primary: promoting one demotes the other */
+for (const [me, other] of [["set-ollama-role", "set-anthropic-role"],
+                           ["set-anthropic-role", "set-ollama-role"]]) {
+  $(me).addEventListener("change", () => {
+    if ($(me).value === "primary" && $(other).value === "primary") {
+      $(other).value = "secondary";
+    }
+  });
+}
+
+/* read-ahead options 0-10 */
+for (let i = 0; i <= 10; i++) {
+  const opt = document.createElement("option");
+  opt.value = String(i);
+  opt.textContent = i === 0 ? "0 — current story only" : String(i);
+  $("set-read-ahead").appendChild(opt);
+}
+
 $("btn-disc-ollama").onclick = discoverOllama;
 $("btn-disc-anthropic").onclick = discoverAnthropic;
 $("btn-save-settings").onclick = async () => {
   const updates = {
     ollama_base_url: $("set-ollama-url").value.trim(),
     anthropic_api_key: $("set-anthropic-key").value.trim(),
+    ollama_role: $("set-ollama-role").value,
+    anthropic_role: $("set-anthropic-role").value,
+    read_ahead: parseInt($("set-read-ahead").value, 10),
   };
   // Model dropdowns only overwrite the saved model when something is selected
   for (const [id, key] of [["set-ollama-model", "ollama_model"],
@@ -563,6 +618,10 @@ $("btn-save-settings").onclick = async () => {
     if ($(id).value) { updates[key] = $(id).value; $(id).dataset.saved = $(id).value; }
   }
   await api().save_settings(updates);
+  readAhead = updates.read_ahead;
+  // settings may have enabled a backend or widened the window — re-request
+  cards.forEach(c => delete c._requested);
+  ensureSummaries(currentIndex);
   $("settings-saved").textContent = "Saved ✓";
   setTimeout(() => { $("settings-saved").textContent = ""; }, 2500);
 };
@@ -591,8 +650,10 @@ document.getElementById("btn-refresh").onclick = async () => {
 };
 
 async function init() {
+  const s = await api().get_settings();
+  readAhead = s.read_ahead ?? 1;
   renderStack(await api().get_queue(100));
-  setInterval(refreshSummariesInPlace, 20000);
+  setInterval(refreshSummariesInPlace, 8000);
 }
 window.addEventListener("pywebviewready", init);
 </script>

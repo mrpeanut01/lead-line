@@ -108,30 +108,55 @@ def call_anthropic(prompt):
     return _parse_summary(resp.json()["content"][0]["text"])
 
 
+_BACKENDS = {
+    "ollama": (call_ollama, "ollama_model"),
+    "anthropic": (call_anthropic, "anthropic_model"),
+}
+
+
+def enabled_backends():
+    """Providers in role order: primaries, then secondaries; 'off' excluded."""
+    rank = {"primary": 0, "secondary": 1}
+    ranked = [(rank[role], name) for name in ("ollama", "anthropic")
+              if (role := config.setting(f"{name}_role")) in rank]
+    return [name for _, name in sorted(ranked)]
+
+
 def summarize(article, source_name):
-    """Router: Ollama first, Anthropic on failure (spec §6.1). Returns
-    (summary, provider, model) or raises if both fail."""
+    """Router: try servers in the user's primary/secondary order (spec §6.1).
+    Returns (summary, provider, model) or raises if all enabled backends fail."""
+    backends = enabled_backends()
+    if not backends:
+        raise RuntimeError("all AI servers are set to off")
     prompt = build_prompt(article, source_name)
     errors = []
-    for fn, provider, model in [
-        (call_ollama, "ollama", config.setting("ollama_model")),
-        (call_anthropic, "anthropic", config.setting("anthropic_model")),
-    ]:
+    for provider in backends:
+        fn, model_key = _BACKENDS[provider]
         try:
-            return fn(prompt), provider, model
+            return fn(prompt), provider, config.setting(model_key)
         except Exception as e:  # timeout, connection, malformed output
             errors.append(f"[{provider}] {e}")
     raise RuntimeError("; ".join(errors))
 
 
-def process_pending(limit=10):
+def summarize_articles(article_ids):
+    """Summarize specific articles (read-ahead window), on demand only.
+    Re-extracts the body first if the TTL purge already dropped it."""
+    from . import ingest
+
+    feeds = {f["id"]: f["name"] for f in store.get_feeds()}
     done = 0
-    for article in store.articles_needing_ai(limit):
-        feed = next((f for f in store.get_feeds() if f["id"] == article["feed_source_id"]), None)
+    for article_id in article_ids:
+        article = store.get_article(article_id)
+        if not article or article["processed"]:
+            continue
+        if not article["body_text"]:
+            ingest.extract_article(article)
+            article = store.get_article(article_id)
         try:
-            summary, provider, model = summarize(article, feed["name"] if feed else None)
+            summary, provider, model = summarize(article, feeds.get(article["feed_source_id"]))
         except RuntimeError:
-            continue  # card falls back to original headline until a later pass
-        store.save_summary(article["id"], summary, provider, model)
+            continue  # card keeps its original headline; retried on a later request
+        store.save_summary(article_id, summary, provider, model)
         done += 1
     return done

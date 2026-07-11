@@ -10,6 +10,8 @@ from . import ai, config, ingest, store
 class Api:
     def __init__(self):
         self._refresh_lock = threading.Lock()
+        self._summarize_lock = threading.Lock()
+        self._inflight = set()
 
     # --- queue / cards ---
 
@@ -30,6 +32,25 @@ class Api:
     def mark_read(self, article_id):
         store.mark_read(article_id)
         return True
+
+    def request_summaries(self, article_ids):
+        """Summarize the read-ahead window in the background. Stories are only
+        summarized on demand — never pre-processed en masse."""
+        with self._summarize_lock:
+            ids = [i for i in article_ids if i not in self._inflight]
+            self._inflight.update(ids)
+        if not ids:
+            return {"queued": 0}
+
+        def run():
+            try:
+                ai.summarize_articles(ids)
+            finally:
+                with self._summarize_lock:
+                    self._inflight.difference_update(ids)
+
+        threading.Thread(target=run, daemon=True).start()
+        return {"queued": len(ids)}
 
     def open_source(self, url):
         """Source link opens the publisher in the system browser (spec §2)."""
@@ -95,13 +116,13 @@ class Api:
     # --- pipeline ---
 
     def refresh(self):
-        """Run one full pipeline pass now (poll -> extract -> summarize -> purge)."""
+        """Run one pipeline pass now (poll -> extract -> purge). Summarization
+        is NOT done here; it happens on demand via request_summaries."""
         if not self._refresh_lock.acquire(blocking=False):
             return {"running": True}
         try:
             new = ingest.poll_all_feeds()
             ingest.extract_pending()
-            ai.process_pending(limit=25)
             store.purge_stale_bodies()
             return {"running": False, "new": new}
         finally:

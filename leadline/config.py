@@ -18,11 +18,16 @@ BODY_TEXT_CACHE_TTL_HOURS = int(os.getenv("BODY_TEXT_CACHE_TTL_HOURS", "24"))
 PAYWALL_WORD_THRESHOLD = int(os.getenv("PAYWALL_WORD_THRESHOLD", "200"))
 
 # User-editable settings; env vars provide the defaults, settings.json wins.
+# *_role: "primary" | "secondary" | "off" — order the AI router tries servers.
+# read_ahead: stories beyond the current card to summarize in advance (0-10).
 _DEFAULTS = {
     "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
     "ollama_model": os.getenv("OLLAMA_MODEL", "phi4:14b"),
+    "ollama_role": os.getenv("OLLAMA_ROLE", "primary"),
     "anthropic_api_key": os.getenv("ANTHROPIC_API_KEY", ""),
     "anthropic_model": os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5"),
+    "anthropic_role": os.getenv("ANTHROPIC_ROLE", "secondary"),
+    "read_ahead": int(os.getenv("READ_AHEAD", "1")),
 }
 
 
@@ -43,6 +48,13 @@ def save_settings(updates):
     except (OSError, ValueError):
         pass
     current.update({k: v for k, v in updates.items() if k in _DEFAULTS})
+    try:
+        current["read_ahead"] = max(0, min(10, int(current.get("read_ahead", 1))))
+    except (TypeError, ValueError):
+        current["read_ahead"] = 1
+    for k in ("ollama_role", "anthropic_role"):
+        if current.get(k) not in ("primary", "secondary", "off"):
+            current[k] = _DEFAULTS[k]
     SETTINGS_PATH.write_text(json.dumps(current, indent=2))
     SETTINGS_PATH.chmod(0o600)  # holds the API key
     return load_settings()
