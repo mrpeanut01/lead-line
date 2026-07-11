@@ -16,7 +16,7 @@ a small read-ahead window.
 
 ## Install
 
-Download `LeadLine-<version>.zip` from [Releases](https://github.com/mrpeanut01/LeadLine/releases),
+Download `LeadLine-<version>.zip` from [Releases](https://github.com/mrpeanut01/lead-line/releases),
 unzip, and drag `LeadLine.app` to Applications.
 
 > **Gatekeeper note:** the app is ad-hoc signed (not notarized), so on first launch macOS

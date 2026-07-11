@@ -7,7 +7,7 @@ faster," and the bar for adding a dependency is higher still.
 ## Dev setup
 
 ```bash
-git clone https://github.com/mrpeanut01/LeadLine.git
+git clone https://github.com/mrpeanut01/lead-line.git
 cd LeadLine
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
