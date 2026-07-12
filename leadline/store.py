@@ -194,6 +194,30 @@ def purge_stale_bodies():
         "AND extracted_at < ?", (cutoff,))
 
 
+def _decode_card(r):
+    r["bluf_bullets"] = json.loads(r["bluf_bullets"]) if r["bluf_bullets"] else []
+    r["topic_tags"] = json.loads(r["topic_tags"]) if r["topic_tags"] else []
+    r.pop("body_text", None)
+    return r
+
+
+def get_backlog(limit=100):
+    """Unread stories older than the max-age window. Never offered in the main
+    queue — the end-of-stack card reports the count and reveals them on demand."""
+    cutoff = _story_age_cutoff()
+    count = query(
+        "SELECT COUNT(*) AS n FROM articles WHERE is_read = 0 AND pub_date < ?",
+        (cutoff,))[0]["n"]
+    items = []
+    if limit:
+        items = [_decode_card(r) for r in query(
+            "SELECT a.*, f.name AS source_name FROM articles a "
+            "LEFT JOIN feed_sources f ON f.id = a.feed_source_id "
+            "WHERE a.is_read = 0 AND a.pub_date < ? "
+            "ORDER BY a.pub_date DESC LIMIT ?", (cutoff, limit))]
+    return {"count": count, "items": items}
+
+
 def get_queue(limit=50):
     """Unread cards, newest day first (spec §4.3, adapted). Within a day the
     sources take turns — each source's newest story, then each one's
@@ -212,9 +236,7 @@ def get_queue(limit=50):
         ") ORDER BY day DESC, source_rank, pub_date DESC LIMIT ?",
         (_story_age_cutoff(), limit))
     for r in rows:
-        r["bluf_bullets"] = json.loads(r["bluf_bullets"]) if r["bluf_bullets"] else []
-        r["topic_tags"] = json.loads(r["topic_tags"]) if r["topic_tags"] else []
-        r.pop("body_text", None)
+        _decode_card(r)
         r.pop("source_rank", None)
         r.pop("day", None)
     return rows

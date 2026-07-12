@@ -159,6 +159,11 @@
   .empty-state .big { font-family: var(--font-display); font-size: 24px;
                       color: var(--color-text); }
 
+  /* terminal "caught up" card: the stack always has somewhere to scroll to */
+  .end-card .empty-state { height: 100%; padding: 0 36px; text-align: center; }
+  .end-card .backlog-note { font-size: 13px; color: var(--color-text-faint); }
+  .end-card .read-full { width: auto; padding: 12px 28px; margin-top: 8px; }
+
   /* settings overlay */
   #settings {
     display: none; position: fixed; inset: 0; z-index: 30;
@@ -431,7 +436,8 @@ function ensureSummaries(idx) {
 const observer = new IntersectionObserver(entries => {
   for (const e of entries) {
     if (!e.isIntersecting) continue;
-    const idx = parseInt(e.target.dataset.index, 10);
+    const idx = e.target.classList.contains("end-card")
+      ? cards.length : parseInt(e.target.dataset.index, 10);
     currentIndex = idx;
     updateProgress(idx);
     ensureSummaries(idx);
@@ -449,8 +455,60 @@ const observer = new IntersectionObserver(entries => {
 }, { root: null, threshold: 0.6 });
 
 function updateProgress(idx) {
-  const pct = cards.length ? ((idx + 1) / cards.length) * 100 : 0;
+  const pct = cards.length ? Math.min(100, ((idx + 1) / cards.length) * 100) : 0;
   document.getElementById("progress-fill").style.height = pct + "%";
+}
+
+/* terminal card: scrolling always has somewhere to land, and stories hidden
+   by the max-story-age filter are explained and revealable on demand */
+const backlogIds = new Set();   // dated stories the user chose to reveal
+
+function buildEndCard() {
+  const card = el("section", "card end-card");
+  const inner = el("div", "empty-state");
+  inner.appendChild(el("div", "big", "You're all caught up"));
+  inner.appendChild(el("div", "", "New stories appear here automatically as feeds update."));
+  inner.appendChild(el("div", "backlog-note", ""));
+  const btn = el("button", "read-full", "Show older stories");
+  btn.style.display = "none";
+  btn.onclick = showBacklog;
+  inner.appendChild(btn);
+  card.appendChild(inner);
+  return card;
+}
+
+async function updateEndCard() {
+  const note = document.querySelector(".end-card .backlog-note");
+  const btn = document.querySelector(".end-card .read-full");
+  if (!note) return;
+  const res = await api().get_backlog(0);
+  const shown = cards.filter(c => backlogIds.has(c.id) && !c._read).length;
+  const hidden = Math.max(0, res.count - shown);
+  if (hidden > 0) {
+    note.textContent = `${hidden} older unread ${hidden === 1 ? "story is" : "stories are"} `
+      + `hidden by Max story age (${maxAgeDays} ${maxAgeDays === 1 ? "day" : "days"}).`;
+    btn.style.display = "";
+  } else {
+    note.textContent = "";
+    btn.style.display = "none";
+  }
+}
+
+async function showBacklog() {
+  const res = await api().get_backlog(100);
+  const stack = document.getElementById("stack");
+  const endEl = stack.querySelector(".end-card");
+  for (const a of res.items) {
+    if (cards.some(c => c.id === a.id)) continue;
+    backlogIds.add(a.id);
+    const c = buildCard(a, cards.length);
+    cards.push(a);
+    stack.insertBefore(c, endEl);
+    observer.observe(c);
+  }
+  updateEndCard();
+  updateProgress(currentIndex);
+  ensureSummaries(currentIndex);
 }
 
 function renderStack(list) {
@@ -459,21 +517,17 @@ function renderStack(list) {
   cards = list;
   maxSeenIndex = 0;
   currentIndex = 0;
-  if (!list.length) {
-    stack.appendChild(el("div", "empty-state",
-      `<div class="big">You're all caught up</div>
-       <div>New stories appear here as feeds update &mdash; pull now with &#8635;,
-       or add sources / raise Max story age in &#9881;</div>`));
-    updateProgress(0);
-    return;
-  }
   list.forEach((a, i) => {
     const c = buildCard(a, i);
     stack.appendChild(c);
     observer.observe(c);
   });
+  const endCard = buildEndCard();
+  stack.appendChild(endCard);
+  observer.observe(endCard);
+  updateEndCard();
   updateProgress(0);
-  ensureSummaries(0);
+  if (list.length) ensureSummaries(0);
 }
 
 /* live stack maintenance: swap in AI summaries as the background pipeline
@@ -482,12 +536,12 @@ function renderStack(list) {
    reader catches up it looks frozen (nothing left to scroll). */
 async function refreshSummariesInPlace() {
   const latest = await api().get_queue(100);
-  if (!cards.length) {
-    if (latest.length) renderStack(latest);
+  if (!cards.length && latest.length) {
+    renderStack(latest);
     return;
   }
   const byId = Object.fromEntries(latest.map(a => [a.id, a]));
-  document.querySelectorAll(".card").forEach(cardEl => {
+  document.querySelectorAll(".card:not(.end-card)").forEach(cardEl => {
     const idx = parseInt(cardEl.dataset.index, 10);
     const current = cards[idx];
     const updated = byId[cardEl.dataset.id];
@@ -501,12 +555,14 @@ async function refreshSummariesInPlace() {
   });
   const have = new Set(cards.map(c => c.id));
   const stack = document.getElementById("stack");
+  const endEl = stack.querySelector(".end-card");
   for (const a of latest.filter(a => !have.has(a.id))) {
     const c = buildCard(a, cards.length);
     cards.push(a);
-    stack.appendChild(c);
+    stack.insertBefore(c, endEl);
     observer.observe(c);
   }
+  updateEndCard();
   updateProgress(currentIndex);
 }
 

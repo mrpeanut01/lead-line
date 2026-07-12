@@ -26,6 +26,10 @@ class Api:
     def get_queue(self, limit=50):
         return store.get_queue(limit)
 
+    def get_backlog(self, limit=100):
+        """Older unread stories hidden by max_story_age (limit=0: count only)."""
+        return store.get_backlog(limit)
+
     def get_body(self, article_id):
         """Body for inline expanded reading mode; re-extract if TTL-purged."""
         article = store.get_article(article_id)
