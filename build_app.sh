@@ -17,10 +17,10 @@ trap 'rm -rf "$TMP"' EXIT
 ditto --norsrc --noextattr --noacl dist/LeadLine.app "$TMP/LeadLine.app"
 codesign --force --deep --sign - "$TMP/LeadLine.app"
 codesign --verify --deep --strict "$TMP/LeadLine.app"
-ditto -c -k --norsrc --noextattr --noacl --keepParent "$TMP/LeadLine.app" "$TMP/LeadLine-$VERSION.zip"
+ditto -c -k --norsrc --noextattr --noacl --keepParent "$TMP/LeadLine.app" "$TMP/LeadLine-$VERSION-mac.zip"
 
 rm -rf dist/LeadLine.app
 ditto --norsrc --noextattr --noacl "$TMP/LeadLine.app" dist/LeadLine.app
-cp "$TMP/LeadLine-$VERSION.zip" dist/
+cp "$TMP/LeadLine-$VERSION-mac.zip" dist/
 
-echo "Built and signed: dist/LeadLine.app + dist/LeadLine-$VERSION.zip (v$VERSION)"
+echo "Built and signed: dist/LeadLine.app + dist/LeadLine-$VERSION-mac.zip (v$VERSION)"

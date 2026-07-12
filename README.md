@@ -18,7 +18,7 @@ a small read-ahead window.
 
 ### macOS
 
-Download `LeadLine-<version>.zip` from [Releases](https://github.com/mrpeanut01/lead-line/releases),
+Download `LeadLine-<version>-mac.zip` from [Releases](https://github.com/mrpeanut01/lead-line/releases),
 unzip, and drag `LeadLine.app` to Applications.
 
 > **Gatekeeper note:** the app is ad-hoc signed (not notarized), so on first launch macOS
@@ -65,7 +65,7 @@ headlines, and BLUF summaries fill in as an AI backend becomes available.
 Releases are built by CI ([build-release.yml](.github/workflows/build-release.yml)): every
 `v*` tag builds `LeadLine.app` on a macOS runner and `LeadLine.exe` on a Windows runner
 (PyInstaller can't cross-compile), smoke-tests both binaries, and attaches
-`LeadLine-<version>.zip` and `LeadLine-<version>-windows.zip` to the GitHub release. Run it
+`LeadLine-<version>-mac.zip` and `LeadLine-<version>-windows.zip` to the GitHub release. Run it
 on demand from the Actions tab (**Run workflow**) to get artifacts without a release.
 
 Local builds — macOS:
