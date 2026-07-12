@@ -1,7 +1,7 @@
 # LeadLine
 
-An anti-clickbait, BLUF-first news reader for the Mac — a straightforward implementation of the
-**UpFront News Reader** product spec.
+An anti-clickbait, BLUF-first news reader for Mac and Windows — a straightforward
+implementation of the **UpFront News Reader** product spec.
 
 Every story is shown one at a time in a full-window **vertical snap-scroll stack**: an
 AI-rewritten straight headline plus 3–5 Bottom-Line-Up-Front bullets, always above the fold.
@@ -16,12 +16,24 @@ a small read-ahead window.
 
 ## Install
 
+### macOS
+
 Download `LeadLine-<version>.zip` from [Releases](https://github.com/mrpeanut01/lead-line/releases),
 unzip, and drag `LeadLine.app` to Applications.
 
 > **Gatekeeper note:** the app is ad-hoc signed (not notarized), so on first launch macOS
 > will warn you. Right-click the app → **Open** → **Open**, or clear the quarantine flag:
 > `xattr -dr com.apple.quarantine /Applications/LeadLine.app`.
+
+### Windows
+
+Download `LeadLine-<version>-windows.zip` from
+[Releases](https://github.com/mrpeanut01/lead-line/releases), unzip, and run `LeadLine.exe`.
+Requires the [Edge WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/)
+(preinstalled on Windows 11 and on up-to-date Windows 10). Data lives in `%APPDATA%\LeadLine`.
+
+> **SmartScreen note:** the exe is unsigned, so Windows may warn on first launch —
+> click **More info** → **Run anyway**.
 
 ## Architecture
 
@@ -48,12 +60,24 @@ python3 -m venv .venv
 Without any configuration the app works immediately: stories appear with their original
 headlines, and BLUF summaries fill in as an AI backend becomes available.
 
-## Build the .app
+## Build the .app / .exe
+
+macOS (local):
 
 ```bash
 .venv/bin/pip install pyinstaller
 ./build_app.sh          # produces dist/LeadLine.app (ad-hoc signed, versioned)
 cp -R dist/LeadLine.app /Applications/
+```
+
+Windows: PyInstaller can't cross-compile, so the `.exe` is built by CI
+([build-windows.yml](.github/workflows/build-windows.yml)) on every `v*` tag — it smoke-tests
+the binary and attaches `LeadLine-<version>-windows.zip` to the release. Run it on demand from
+the Actions tab (**Run workflow**), or build locally on a Windows machine:
+
+```powershell
+pip install -r requirements.txt pyinstaller
+pyinstaller --noconfirm --clean LeadLine-win.spec   # produces dist/LeadLine.exe
 ```
 
 ## AI backends
@@ -85,11 +109,12 @@ window (0–10, default 1). Nothing is sent to a model before you're about to re
 | `ANTHROPIC_MODEL` | `claude-haiku-4-5` |
 | `ANTHROPIC_ROLE` | `secondary` |
 | `READ_AHEAD` | `1` |
+| `MAX_STORY_AGE_DAYS` | `3` |
 | `MAX_ANTHROPIC_DAILY_ARTICLES` | `2000` |
 | `POLL_INTERVAL_MINUTES` | `15` |
 | `BODY_TEXT_CACHE_TTL_HOURS` | `24` |
 | `PAYWALL_WORD_THRESHOLD` | `200` |
-| `LEADLINE_DATA_DIR` | `~/Library/Application Support/LeadLine` |
+| `LEADLINE_DATA_DIR` | `~/Library/Application Support/LeadLine` (macOS) / `%APPDATA%\LeadLine` (Windows) |
 
 ## Controls
 
