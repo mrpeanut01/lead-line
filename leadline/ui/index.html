@@ -266,6 +266,11 @@
       <select id="set-read-ahead"></select>
     </div>
     <div class="disc-status">Stories summarized in advance beyond the one on screen</div>
+    <div class="setting-row">
+      <label for="set-max-age">Max story age</label>
+      <select id="set-max-age"></select>
+    </div>
+    <div class="disc-status">Stories older than this are considered dated and not shown</div>
     <div class="setting-row save-row">
       <button id="btn-save-settings">Save</button>
       <span class="disc-status" id="settings-saved"></span>
@@ -296,6 +301,7 @@ let cards = [];            // ordered article objects currently in the stack
 let maxSeenIndex = 0;
 let currentIndex = 0;
 let readAhead = 1;         // stories beyond the current card to summarize
+let maxAgeDays = 3;        // stories older than this are not offered
 let hintFaded = false;
 
 const api = () => window.pywebview.api;
@@ -576,6 +582,9 @@ async function loadSettings() {
   $("set-ollama-role").value = s.ollama_role || "primary";
   $("set-anthropic-role").value = s.anthropic_role || "secondary";
   $("set-read-ahead").value = String(s.read_ahead ?? 1);
+  const age = String(s.max_story_age_days ?? 3);
+  if (![...$("set-max-age").options].some(o => o.value === age)) maxAgeOption(parseInt(age, 10));
+  $("set-max-age").value = age;
   for (const [id, saved] of [["set-ollama-model", s.ollama_model],
                              ["set-anthropic-model", s.anthropic_model]]) {
     $(id).dataset.saved = saved || "";
@@ -605,6 +614,15 @@ for (let i = 0; i <= 10; i++) {
   $("set-read-ahead").appendChild(opt);
 }
 
+/* max-story-age options */
+function maxAgeOption(d) {
+  const opt = document.createElement("option");
+  opt.value = String(d);
+  opt.textContent = d === 1 ? "1 day" : `${d} days`;
+  $("set-max-age").appendChild(opt);
+}
+[1, 2, 3, 5, 7, 14, 30].forEach(maxAgeOption);
+
 $("btn-disc-ollama").onclick = discoverOllama;
 $("btn-disc-anthropic").onclick = discoverAnthropic;
 $("btn-save-settings").onclick = async () => {
@@ -614,6 +632,7 @@ $("btn-save-settings").onclick = async () => {
     ollama_role: $("set-ollama-role").value,
     anthropic_role: $("set-anthropic-role").value,
     read_ahead: parseInt($("set-read-ahead").value, 10),
+    max_story_age_days: parseInt($("set-max-age").value, 10),
   };
   // Model dropdowns only overwrite the saved model when something is selected
   for (const [id, key] of [["set-ollama-model", "ollama_model"],
@@ -622,6 +641,10 @@ $("btn-save-settings").onclick = async () => {
   }
   await api().save_settings(updates);
   readAhead = updates.read_ahead;
+  if (updates.max_story_age_days !== maxAgeDays) {
+    maxAgeDays = updates.max_story_age_days;
+    renderStack(await api().get_queue(100));   // age window changed — rebuild
+  }
   // settings may have enabled a backend or widened the window — re-request
   cards.forEach(c => delete c._requested);
   ensureSummaries(currentIndex);
@@ -713,6 +736,7 @@ document.getElementById("btn-refresh").onclick = async () => {
 async function init() {
   const s = await api().get_settings();
   readAhead = s.read_ahead ?? 1;
+  maxAgeDays = s.max_story_age_days ?? 3;
   renderStack(await api().get_queue(100));
   setInterval(refreshSummariesInPlace, 8000);
 }

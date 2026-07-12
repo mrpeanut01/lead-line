@@ -82,6 +82,15 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def _story_age_cutoff():
+    """ISO timestamp before which stories are considered dated and not offered."""
+    try:
+        days = int(config.setting("max_story_age_days"))
+    except (TypeError, ValueError):
+        days = 3
+    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+
 # --- feed sources ---
 
 def seed_default_feeds():
@@ -136,9 +145,17 @@ def insert_article(feed_source_id, canonical_url, dedup_hash, original_headline,
 
 
 def articles_needing_extraction(limit=25):
+    """Same priority as get_queue (newest day first, sources taking turns within
+    a day) so the per-pass extraction budget goes to the stories offered next,
+    and dated stories are never extracted at all."""
     return query(
-        "SELECT * FROM articles WHERE extracted_at IS NULL AND is_read = 0 "
-        "ORDER BY pub_date DESC LIMIT ?", (limit,))
+        "SELECT * FROM ("
+        "  SELECT *, substr(pub_date, 1, 10) AS day, ROW_NUMBER() OVER "
+        "    (PARTITION BY feed_source_id, substr(pub_date, 1, 10) "
+        "     ORDER BY pub_date DESC) AS source_rank "
+        "  FROM articles WHERE extracted_at IS NULL AND is_read = 0 AND pub_date >= ?"
+        ") ORDER BY day DESC, source_rank, pub_date DESC LIMIT ?",
+        (_story_age_cutoff(), limit))
 
 
 def save_extraction(article_id, body_text, is_paywalled, card_image_url):
@@ -178,15 +195,28 @@ def purge_stale_bodies():
 
 
 def get_queue(limit=50):
-    """Unread cards, newest first (spec §4.3)."""
+    """Unread cards, newest day first (spec §4.3, adapted). Within a day the
+    sources take turns — each source's newest story, then each one's
+    second-newest, and so on — so a prolific feed can't crowd the others out
+    while yesterday's news never outranks today's. Stories older than the
+    max_story_age_days setting are not offered."""
     rows = query(
-        "SELECT a.*, f.name AS source_name FROM articles a "
-        "LEFT JOIN feed_sources f ON f.id = a.feed_source_id "
-        "WHERE a.is_read = 0 ORDER BY a.pub_date DESC LIMIT ?", (limit,))
+        "SELECT * FROM ("
+        "  SELECT a.*, f.name AS source_name, "
+        "         substr(a.pub_date, 1, 10) AS day, ROW_NUMBER() OVER "
+        "    (PARTITION BY a.feed_source_id, substr(a.pub_date, 1, 10) "
+        "     ORDER BY a.pub_date DESC) AS source_rank "
+        "  FROM articles a "
+        "  LEFT JOIN feed_sources f ON f.id = a.feed_source_id "
+        "  WHERE a.is_read = 0 AND a.pub_date >= ?"
+        ") ORDER BY day DESC, source_rank, pub_date DESC LIMIT ?",
+        (_story_age_cutoff(), limit))
     for r in rows:
         r["bluf_bullets"] = json.loads(r["bluf_bullets"]) if r["bluf_bullets"] else []
         r["topic_tags"] = json.loads(r["topic_tags"]) if r["topic_tags"] else []
         r.pop("body_text", None)
+        r.pop("source_rank", None)
+        r.pop("day", None)
     return rows
 
 

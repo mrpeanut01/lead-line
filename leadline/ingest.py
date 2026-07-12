@@ -7,6 +7,7 @@ Newspaper4k. robots.txt is respected (spec §12).
 import hashlib
 import re
 import urllib.robotparser
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -80,7 +81,13 @@ def poll_feed(feed):
 
 
 def poll_all_feeds():
-    return sum(poll_feed(f) for f in store.get_feeds(enabled_only=True))
+    """Poll every enabled feed concurrently so a slow or unreachable source
+    (each has a 20 s timeout) can't delay or starve the others."""
+    feeds = store.get_feeds(enabled_only=True)
+    if not feeds:
+        return 0
+    with ThreadPoolExecutor(max_workers=min(8, len(feeds))) as pool:
+        return sum(pool.map(poll_feed, feeds))
 
 
 # --- extraction ---
