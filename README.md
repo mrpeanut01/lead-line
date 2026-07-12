@@ -62,7 +62,13 @@ headlines, and BLUF summaries fill in as an AI backend becomes available.
 
 ## Build the .app / .exe
 
-macOS (local):
+Releases are built by CI ([build-release.yml](.github/workflows/build-release.yml)): every
+`v*` tag builds `LeadLine.app` on a macOS runner and `LeadLine.exe` on a Windows runner
+(PyInstaller can't cross-compile), smoke-tests both binaries, and attaches
+`LeadLine-<version>.zip` and `LeadLine-<version>-windows.zip` to the GitHub release. Run it
+on demand from the Actions tab (**Run workflow**) to get artifacts without a release.
+
+Local builds — macOS:
 
 ```bash
 .venv/bin/pip install pyinstaller
@@ -70,10 +76,7 @@ macOS (local):
 cp -R dist/LeadLine.app /Applications/
 ```
 
-Windows: PyInstaller can't cross-compile, so the `.exe` is built by CI
-([build-windows.yml](.github/workflows/build-windows.yml)) on every `v*` tag — it smoke-tests
-the binary and attaches `LeadLine-<version>-windows.zip` to the release. Run it on demand from
-the Actions tab (**Run workflow**), or build locally on a Windows machine:
+Windows:
 
 ```powershell
 pip install -r requirements.txt pyinstaller

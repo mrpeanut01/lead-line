@@ -1,0 +1,112 @@
+name: Build release
+
+# Builds LeadLine.app (macOS) and LeadLine.exe (Windows) — PyInstaller cannot
+# cross-compile, so each runs on its native runner. Manual runs produce
+# downloadable artifacts; tag pushes (v*) also create the GitHub release and
+# attach both zips.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure release exists (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" \
+            || gh release create "$GITHUB_REF_NAME" --generate-notes
+
+  windows:
+    runs-on: windows-latest
+    needs: release
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Build
+        run: pyinstaller --noconfirm --clean LeadLine-win.spec
+
+      - name: Read version
+        id: v
+        shell: bash
+        run: echo "version=$(python -c 'import leadline; print(leadline.__version__)')" >> "$GITHUB_OUTPUT"
+
+      - name: Package
+        shell: pwsh
+        run: Compress-Archive -Path dist/LeadLine.exe -DestinationPath "dist/LeadLine-${{ steps.v.outputs.version }}-windows.zip"
+
+      - name: Smoke test (exe starts and creates its data dir)
+        shell: pwsh
+        run: |
+          $env:LEADLINE_DATA_DIR = "$env:RUNNER_TEMP\leadline-smoke"
+          $p = Start-Process -FilePath dist/LeadLine.exe -PassThru
+          Start-Sleep -Seconds 20
+          if ($p.HasExited) { throw "LeadLine.exe exited early (code $($p.ExitCode))" }
+          if (-not (Test-Path "$env:LEADLINE_DATA_DIR\leadline.db")) { throw "no database created" }
+          Stop-Process -Id $p.Id -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LeadLine-windows
+          path: dist/LeadLine-*-windows.zip
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/LeadLine-*-windows.zip --clobber
+
+  macos:
+    runs-on: macos-latest
+    needs: release
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -r requirements.txt pyinstaller
+
+      - name: Build (ad-hoc signed .app + zip)
+        run: ./build_app.sh
+
+      - name: Smoke test (app starts and creates its data dir)
+        run: |
+          export LEADLINE_DATA_DIR="$RUNNER_TEMP/leadline-smoke"
+          ./dist/LeadLine.app/Contents/MacOS/LeadLine &
+          APP_PID=$!
+          sleep 20
+          kill -0 "$APP_PID" 2>/dev/null || { echo "LeadLine exited early"; exit 1; }
+          test -f "$LEADLINE_DATA_DIR/leadline.db" || { echo "no database created"; exit 1; }
+          kill "$APP_PID"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LeadLine-macos
+          path: dist/LeadLine-*.zip
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/LeadLine-*.zip --clobber
