@@ -38,11 +38,14 @@ def dedup_hash(title, pub_date, canonical_url):
 
 
 def _entry_pub_date(entry):
+    now = datetime.now(timezone.utc)
     for key in ("published_parsed", "updated_parsed"):
         t = entry.get(key)
         if t:
-            return datetime(*t[:6], tzinfo=timezone.utc).isoformat()
-    return datetime.now(timezone.utc).isoformat()
+            # Clamp future-dated entries (misconfigured feeds) so they can't
+            # pin themselves to the top of the newest-day-first queue.
+            return min(datetime(*t[:6], tzinfo=timezone.utc), now).isoformat()
+    return now.isoformat()
 
 
 def poll_feed(feed):

@@ -462,7 +462,8 @@ function renderStack(list) {
   if (!list.length) {
     stack.appendChild(el("div", "empty-state",
       `<div class="big">You're all caught up</div>
-       <div>Pull new stories with &#8635; or add sources in &#9881;</div>`));
+       <div>New stories appear here as feeds update &mdash; pull now with &#8635;,
+       or add sources / raise Max story age in &#9881;</div>`));
     updateProgress(0);
     return;
   }
@@ -475,9 +476,16 @@ function renderStack(list) {
   ensureSummaries(0);
 }
 
-/* swap in AI summaries as the background pipeline finishes them */
+/* live stack maintenance: swap in AI summaries as the background pipeline
+   finishes them, and append stories the poller found since the last render —
+   without this the stack only changes on launch or manual ⟳, and once the
+   reader catches up it looks frozen (nothing left to scroll). */
 async function refreshSummariesInPlace() {
   const latest = await api().get_queue(100);
+  if (!cards.length) {
+    if (latest.length) renderStack(latest);
+    return;
+  }
   const byId = Object.fromEntries(latest.map(a => [a.id, a]));
   document.querySelectorAll(".card").forEach(cardEl => {
     const idx = parseInt(cardEl.dataset.index, 10);
@@ -491,6 +499,15 @@ async function refreshSummariesInPlace() {
       observer.observe(fresh);
     }
   });
+  const have = new Set(cards.map(c => c.id));
+  const stack = document.getElementById("stack");
+  for (const a of latest.filter(a => !have.has(a.id))) {
+    const c = buildCard(a, cards.length);
+    cards.push(a);
+    stack.appendChild(c);
+    observer.observe(c);
+  }
+  updateProgress(currentIndex);
 }
 
 /* keyboard: arrows / space advance the stack */
