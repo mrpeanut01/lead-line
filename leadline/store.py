@@ -52,6 +52,22 @@ CREATE TABLE IF NOT EXISTS articles (
 CREATE INDEX IF NOT EXISTS idx_articles_queue ON articles (is_read, processed, pub_date);
 """
 
+# One story per canonical URL. Earlier releases keyed dedup on a hash that
+# included the pub date, so feeds with missing/edited/future-dated timestamps
+# re-inserted the same story every poll; collapse those duplicates (preferring
+# the read copy, so seen stories don't resurrect as unread) before enforcing
+# uniqueness. Idempotent — runs on every connect.
+DEDUP_MIGRATION = """
+DELETE FROM articles WHERE id NOT IN (
+    SELECT id FROM (
+        SELECT id, ROW_NUMBER() OVER (
+            PARTITION BY canonical_url ORDER BY is_read DESC, created_at
+        ) AS rn FROM articles
+    ) WHERE rn = 1
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_articles_canonical ON articles (canonical_url);
+"""
+
 
 def _connect():
     global _conn
@@ -60,6 +76,7 @@ def _connect():
         _conn = sqlite3.connect(config.DB_PATH, check_same_thread=False)
         _conn.row_factory = sqlite3.Row
         _conn.executescript(SCHEMA)
+        _conn.executescript(DEDUP_MIGRATION)
         _conn.commit()
     return _conn
 

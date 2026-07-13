@@ -30,11 +30,13 @@ def canonicalize_url(url):
     return urlunparse((p.scheme, p.netloc.lower(), p.path, "", urlencode(params), ""))
 
 
-def dedup_hash(title, pub_date, canonical_url):
-    """SHA-256 of normalized_title|pubDate_utc_minute|canonical_url (spec §4.1)."""
-    minute = (pub_date or "")[:16]  # ISO timestamp truncated to minute
+def dedup_hash(title, canonical_url):
+    """SHA-256 of normalized_title|canonical_url (spec §4.1, minus its pubDate
+    component: feeds that omit, edit, or future-date timestamps — which the
+    clamp in _entry_pub_date rewrites to poll time — would make the same story
+    hash differently on every poll and resurrect as a 'new' unread card)."""
     normalized_title = re.sub(r"\s+", " ", (title or "").strip().lower())
-    return hashlib.sha256(f"{normalized_title}|{minute}|{canonical_url}".encode()).hexdigest()
+    return hashlib.sha256(f"{normalized_title}|{canonical_url}".encode()).hexdigest()
 
 
 def _entry_pub_date(entry):
@@ -77,7 +79,7 @@ def poll_feed(feed):
         canonical = canonicalize_url(link)
         pub = _entry_pub_date(entry)
         desc = re.sub(r"<[^>]+>", " ", entry.get("summary", "") or "").strip()
-        if store.insert_article(feed["id"], canonical, dedup_hash(title, pub, canonical),
+        if store.insert_article(feed["id"], canonical, dedup_hash(title, canonical),
                                 title.strip(), desc, pub):
             new += 1
     return new
