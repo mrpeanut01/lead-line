@@ -2,6 +2,7 @@
 import json
 import sys
 import threading
+import time
 import webbrowser
 from pathlib import Path
 
@@ -14,12 +15,16 @@ if getattr(sys, "frozen", False):  # PyInstaller bundle
 else:
     _UI_DIR = Path(__file__).parent / "ui"
 
+SUMMARY_RETRY_SECONDS = 30   # after every server failed a story, wait before retrying it
+
 
 class Api:
     def __init__(self):
         self._refresh_lock = threading.Lock()
+        self._poll_lock = threading.Lock()
         self._summarize_lock = threading.Lock()
         self._inflight = set()
+        self._failed = {}    # article id -> time its summary last failed
 
     # --- queue / cards ---
 
@@ -47,19 +52,27 @@ class Api:
 
     def request_summaries(self, article_ids):
         """Summarize the read-ahead window in the background. Stories are only
-        summarized on demand — never pre-processed en masse."""
+        summarized on demand — never pre-processed en masse. The UI re-asks for
+        stories still pending, so ones that just failed are skipped for a bit."""
+        now = time.time()
         with self._summarize_lock:
-            ids = [i for i in article_ids if i not in self._inflight]
+            ids = [i for i in article_ids if i not in self._inflight
+                   and now - self._failed.get(i, 0) > SUMMARY_RETRY_SECONDS]
             self._inflight.update(ids)
         if not ids:
             return {"queued": 0}
+        ai.note_demand()
 
         def run():
+            failed = ids
             try:
-                ai.summarize_articles(ids)
+                failed = ai.summarize_articles(ids)
             finally:
                 with self._summarize_lock:
                     self._inflight.difference_update(ids)
+                    for i in ids:
+                        self._failed.pop(i, None)
+                    self._failed.update(dict.fromkeys(failed, time.time()))
 
         threading.Thread(target=run, daemon=True).start()
         return {"queued": len(ids)}
@@ -101,7 +114,15 @@ class Api:
         return config.load_settings()
 
     def save_settings(self, updates):
-        return config.save_settings(updates)
+        settings = config.save_settings(updates)
+        with self._summarize_lock:
+            self._failed.clear()   # a fixed key or server should retry right away
+        ai.settings_changed()
+        return settings
+
+    def get_ai_status(self):
+        """Ollama / Claude state for the status pill; in-memory, no network."""
+        return ai.backend_status()
 
     def discover_ollama_models(self, base_url=None):
         """List models available on the Ollama server (GET /api/tags)."""
@@ -140,12 +161,21 @@ class Api:
         if not self._refresh_lock.acquire(blocking=False):
             return {"running": True}
         try:
-            new = ingest.poll_all_feeds()
+            with self._poll_lock:
+                new = ingest.poll_all_feeds()
             ingest.extract_pending()
             store.purge_stale_bodies()
             return {"running": False, "new": new}
         finally:
             self._refresh_lock.release()
+
+    def get_latest(self):
+        """⟳: poll every feed now so the reader can jump back to the top with
+        whatever is new. Poll only — extraction runs on the pipeline schedule
+        and summaries on demand — so the button answers in seconds. If a
+        scheduled poll is mid-flight, wait for it rather than skip."""
+        with self._poll_lock:
+            return {"new": ingest.poll_all_feeds()}
 
     def get_status(self):
         return store.status()

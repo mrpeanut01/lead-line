@@ -19,7 +19,10 @@ DATA_DIR = Path(os.getenv("LEADLINE_DATA_DIR", _default_data_dir()))
 DB_PATH = DATA_DIR / "leadline.db"
 SETTINGS_PATH = DATA_DIR / "settings.json"
 
-OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "8"))
+OLLAMA_CONNECT_TIMEOUT_SECONDS = 5
+# Generating one summary once the model is in memory (loading is timed separately).
+OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120"))
+OLLAMA_LOAD_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_LOAD_TIMEOUT_SECONDS", "300"))
 MAX_ANTHROPIC_DAILY_ARTICLES = int(os.getenv("MAX_ANTHROPIC_DAILY_ARTICLES", "2000"))
 POLL_INTERVAL_MINUTES = int(os.getenv("POLL_INTERVAL_MINUTES", "15"))
 BODY_TEXT_CACHE_TTL_HOURS = int(os.getenv("BODY_TEXT_CACHE_TTL_HOURS", "24"))
@@ -27,6 +30,8 @@ PAYWALL_WORD_THRESHOLD = int(os.getenv("PAYWALL_WORD_THRESHOLD", "200"))
 
 # User-editable settings; env vars provide the defaults, settings.json wins.
 # *_role: "primary" | "secondary" | "off" — order the AI router tries servers.
+#   anthropic_role may also be "primary_during_load": primary until Ollama's
+#   model is in memory, then secondary.
 # read_ahead: stories beyond the current card to summarize in advance (0-10).
 # max_story_age_days: stories older than this are not offered in the queue (1-30).
 _DEFAULTS = {
@@ -38,6 +43,10 @@ _DEFAULTS = {
     "anthropic_role": os.getenv("ANTHROPIC_ROLE", "secondary"),
     "read_ahead": int(os.getenv("READ_AHEAD", "1")),
     "max_story_age_days": int(os.getenv("MAX_STORY_AGE_DAYS", "3")),
+}
+ROLES = {
+    "ollama_role": ("primary", "secondary", "off"),
+    "anthropic_role": ("primary", "primary_during_load", "secondary", "off"),
 }
 
 
@@ -66,11 +75,16 @@ def save_settings(updates):
         current["max_story_age_days"] = max(1, min(30, int(current.get("max_story_age_days", 3))))
     except (TypeError, ValueError):
         current["max_story_age_days"] = 3
-    for k in ("ollama_role", "anthropic_role"):
-        if current.get(k) not in ("primary", "secondary", "off"):
+    for k, allowed in ROLES.items():
+        if current.get(k) not in allowed:
             current[k] = _DEFAULTS[k]
-    SETTINGS_PATH.write_text(json.dumps(current, indent=2))
-    SETTINGS_PATH.chmod(0o600)  # holds the API key
+    # Write-then-rename so the Ollama monitor thread never reads a half-written
+    # file; created 600 because it holds the API key.
+    tmp = SETTINGS_PATH.with_name(SETTINGS_PATH.name + ".tmp")
+    with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
+        f.write(json.dumps(current, indent=2))
+    os.replace(tmp, SETTINGS_PATH)
+    SETTINGS_PATH.chmod(0o600)
     return load_settings()
 
 

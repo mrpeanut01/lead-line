@@ -43,7 +43,7 @@ Single-process Python desktop app in a native macOS window (pywebview / WKWebVie
 |---|---|
 | Ingestion | RSS polling with conditional GET (ETag / Last-Modified), URL normalization, SHA-256 dedup, `INSERT OR IGNORE` |
 | Extraction | Dependency-free paragraph harvester + `og:image`; robots.txt respected; paywall detection by word count |
-| AI processing | Ollama first (structured JSON output), Anthropic Claude Haiku fallback with a hard daily cap; provider logged per article |
+| AI processing | Ollama first (structured JSON output, model warmed into memory at launch), Anthropic Claude Haiku fallback — or cover while the model loads — with a hard daily cap; provider logged per article |
 | Storage | SQLite in `~/Library/Application Support/LeadLine/` (Postgres stand-in); body text TTL-purged after 24 h (Redis stand-in) |
 | UI | `scroll-snap-type: y mandatory` card stack, 100vh cards, edge progress bar, topic accent, inline reading mode |
 
@@ -93,12 +93,39 @@ role — **Primary**, **Secondary**, or **Off** — and the router tries them in
 `~/Library/Application Support/LeadLine/settings.json` (mode 600) and take effect
 immediately; environment variables below act as defaults only.
 
-- **Ollama:** install from <https://ollama.com>, then e.g. `ollama pull llama3.2:3b`
-  and pick it in settings.
+- **Ollama:** install from <https://ollama.com>, then e.g. `ollama pull gemma4:12b`
+  and pick it in settings. Thinking models are asked to skip their reasoning pass (a summary
+  doesn't need it, and it multiplies latency); models that can't skip it, like gpt-oss, are
+  called normally.
 - **Anthropic:** paste an API key from <https://console.anthropic.com>.
 
 Stories are summarized **on demand only** — the story on screen plus the **Read ahead**
 window (0–10, default 1). Nothing is sent to a model before you're about to read it.
+
+### Ollama model loading
+
+A local model has to be loaded into memory before it can answer, and a cold load plus a
+summary can take longer than the summary alone. LeadLine loads the Ollama model as soon as it
+launches, and again when you come back to reading after the server has unloaded it — so
+summaries wait for the load instead of timing out. Claude has an extra role for this:
+
+- **Secondary** — summaries wait while the model loads; Claude is used only if Ollama fails
+  or is unreachable.
+- **Primary during Ollama load, then Secondary** — Claude summarizes until the model is in
+  memory, then steps back to fallback. No waiting on a cold model.
+
+The status pill at the top of the window shows both servers (hover for details, click for
+settings):
+
+| Dot | Ollama | Claude |
+|---|---|---|
+| green | model loaded and ready | summarizing (primary, or covering for Ollama) |
+| green ring | — | standing by as the fallback |
+| amber, pulsing | loading the model into memory | — |
+| amber ring | model not in memory; loads when you read | — |
+| amber | loaded, but the last summary failed | — |
+| red | server unreachable, or model not installed | no API key, or the last request failed |
+| grey | off | off |
 
 ## Configuration (environment variables)
 
@@ -106,11 +133,12 @@ window (0–10, default 1). Nothing is sent to a model before you're about to re
 |---|---|
 | `OLLAMA_BASE_URL` | `http://localhost:11434` |
 | `OLLAMA_MODEL` | `phi4:14b` |
-| `OLLAMA_TIMEOUT_SECONDS` | `8` |
+| `OLLAMA_TIMEOUT_SECONDS` | `120` (one summary, once the model is loaded) |
+| `OLLAMA_LOAD_TIMEOUT_SECONDS` | `300` (loading the model into memory) |
 | `OLLAMA_ROLE` | `primary` |
 | `ANTHROPIC_API_KEY` | (unset — fallback disabled) |
 | `ANTHROPIC_MODEL` | `claude-haiku-4-5` |
-| `ANTHROPIC_ROLE` | `secondary` |
+| `ANTHROPIC_ROLE` | `secondary` (or `primary`, `primary_during_load`, `off`) |
 | `READ_AHEAD` | `1` |
 | `MAX_STORY_AGE_DAYS` | `3` |
 | `MAX_ANTHROPIC_DAILY_ARTICLES` | `2000` |
@@ -126,7 +154,8 @@ window (0–10, default 1). Nothing is sent to a model before you're about to re
 | Scroll / swipe up, `↓` `j` space | Next story (marks the passed story read) |
 | Scroll / swipe down, `↑` `k` | Previous story |
 | Read full article | Expand body inline |
-| ⟳ | Poll feeds now |
+| ⟳ (or **Check for new stories** on the last card) | Poll feeds now and jump back to the top if anything is new; a toast says when nothing is |
+| ● Ollama ● Claude | AI server status (see above); click for settings |
 | ⚙ | Manage RSS sources, view provider stats |
 
 Default sources: NPR, PBS NewsHour, Ars Technica, The Verge, Wired. In ⚙ you can add any RSS
