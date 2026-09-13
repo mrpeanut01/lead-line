@@ -7,7 +7,7 @@ from pathlib import Path
 
 import webview
 
-from . import config, store
+from . import ai, config, store
 from .api import Api
 
 if getattr(sys, "frozen", False):  # PyInstaller bundle
@@ -42,6 +42,7 @@ def main():
     store.seed_default_feeds()
     api = Api()
     threading.Thread(target=pipeline_worker, args=(api,), daemon=True).start()
+    threading.Thread(target=ai.monitor_ollama, daemon=True).start()   # warm the model now
 
     window = webview.create_window(
         "LeadLine",

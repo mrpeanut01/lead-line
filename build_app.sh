@@ -8,7 +8,7 @@
 # copy before it re-enters the synced tree.
 set -e
 cd "$(dirname "$0")"
-.venv/bin/pyinstaller --noconfirm --clean LeadLine.spec
+.venv/bin/python -m PyInstaller --noconfirm --clean LeadLine.spec
 
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" dist/LeadLine.app/Contents/Info.plist)
 TMP=$(mktemp -d)
