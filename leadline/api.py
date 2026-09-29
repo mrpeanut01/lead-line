@@ -133,7 +133,7 @@ class Api:
         w = self._window
         if not w:
             return False
-        self._reader_geometry = (w.width, w.height, w.x, w.y)
+        self._reader_geometry = (w.width, w.height)
         w.on_top = bool(config.setting("ticker_on_top"))
         w.resize(max(w.width, 640), int(height))
         return True
@@ -143,10 +143,10 @@ class Api:
         if not w:
             return False
         w.on_top = False
-        width, height, x, y = self._reader_geometry or (540, 900, None, None)
+        width, height = self._reader_geometry or (540, 900)
+        # resize keeps the top-left fixed; no move(), whose coordinates are
+        # monitor-relative on some platforms while x/y are absolute
         w.resize(max(width, 420), max(height, 640))
-        if x is not None:
-            w.move(x, y)
         return True
 
     def open_source(self, url):

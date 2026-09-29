@@ -1140,9 +1140,10 @@ function tkRotation() {
   return [...tkItems.values()].filter(i => tkAge(i) < tk.maxAgeH).slice(0, tk.count);
 }
 
-/* keep the track at least two viewport widths long by appending the next
-   story in rotation order after whatever is last on the track */
-let tkNext = 0;
+/* keep the track at least two viewport widths long by appending the story
+   after the last one appended; when a lap ends (or that story left the
+   rotation) start again from the newest, so fresh stories come up next */
+let tkLastId = null;
 function tkFill() {
   const track = $("ticker-track");
   const rotation = tkRotation();
@@ -1150,8 +1151,10 @@ function tkFill() {
   const want = $("ticker-viewport").clientWidth * 2;
   let guard = 0;
   while (track.scrollWidth - tkOffset < want && guard++ < 200) {
-    track.appendChild(tkBuild(rotation[tkNext % rotation.length]));
-    tkNext = (tkNext + 1) % rotation.length;
+    const at = rotation.findIndex(i => i.id === tkLastId);
+    const item = rotation[at >= 0 && at + 1 < rotation.length ? at + 1 : 0];
+    track.appendChild(tkBuild(item));
+    tkLastId = item.id;
   }
 }
 
@@ -1191,7 +1194,7 @@ async function tkRefresh() {
   });
   if (res.error) {
     tkNote(res.error, "error", "error");
-  } else if (res.ollama === "loading" || res.ollama === "checking" || res.ollama === "idle") {
+  } else if (res.ollama === "loading" || (res.pending && ["checking", "idle"].includes(res.ollama))) {
     tkNote(`Ollama model loading…${res.pending ? ` ${res.pending} waiting` : ""}`, "", "loading");
   } else if (!res.items.length) {
     tkNote(res.pending ? `Condensing ${res.pending} ${res.pending === 1 ? "story" : "stories"}…`
@@ -1211,14 +1214,32 @@ function tkRecolor() {
   });
 }
 
+/* the native resize lands after the bridge call returns (queued on the GUI
+   thread), so wait for the page to see it before measuring layout */
+function afterResize() {
+  return new Promise(resolve => {
+    const done = () => { window.removeEventListener("resize", done);
+                         requestAnimationFrame(() => requestAnimationFrame(resolve)); };
+    window.addEventListener("resize", done);
+    setTimeout(done, 500);
+  });
+}
+
+let tkGen = 0;              // bumped on every enter/exit; stale awaits bail out
+let tkReaderIndex = 0;      // the card on screen when the ticker opened
+
 async function enterTicker() {
   if (tickerOn) return;
   tickerOn = true;
+  const gen = ++tkGen;
+  tkReaderIndex = currentIndex;
   document.body.classList.add("ticker");
-  $("ticker-track").innerHTML = ""; tkOffset = 0; tkNext = 0; tkLast = 0;
+  $("ticker-track").innerHTML = ""; tkOffset = 0; tkLastId = null; tkLast = 0;
   tkNote("Starting ticker…", "", "checking");
   await api().enter_ticker(Math.round(tk.font * 2.4) + TITLE_BAR_PX);
+  if (gen !== tkGen) return;
   await tkRefresh();
+  if (gen !== tkGen) return;
   tkDataTimer = setInterval(tkRefresh, 10000);   // local DB read only
   tkColorTimer = setInterval(tkRecolor, 60000);
   tkPollTimer = setInterval(async () => {   // the ticker looks for new stories itself
@@ -1228,13 +1249,20 @@ async function enterTicker() {
   tkFrame = requestAnimationFrame(tkStep);
 }
 
-async function exitTicker() {
+async function exitTicker(toIndex) {
   if (!tickerOn) return;
   tickerOn = false;
+  tkGen++;
   cancelAnimationFrame(tkFrame);
   [tkDataTimer, tkColorTimer, tkPollTimer].forEach(clearInterval);
-  document.body.classList.remove("ticker");
+  const resized = afterResize();
   await api().exit_ticker();
+  document.body.classList.remove("ticker");
+  await resized;
+  // the hidden stack lost its scroll position; put the reader back
+  const target = document.querySelector(
+    `#stack .card[data-index="${toIndex ?? tkReaderIndex}"]`);
+  if (target) $("stack").scrollTop = target.offsetTop;
   refreshSummariesInPlace();
 }
 
@@ -1244,12 +1272,9 @@ async function exitTicker() {
    card fills in when the summary lands. */
 let overlayTimer = 0;
 async function openFromTicker(id) {
-  await exitTicker();
   const idx = cards.findIndex(c => c.id === id);
-  if (idx >= 0) {
-    const cardEl = document.querySelector(`.card[data-index="${idx}"]`);
-    if (cardEl) { $("stack").scrollTop = cardEl.offsetTop; return; }
-  }
+  await exitTicker(idx >= 0 ? idx : undefined);
+  if (idx >= 0 && document.querySelector(`#stack .card[data-index="${idx}"]`)) return;
   const a = await api().get_card(id);
   if (!a) { toast("That story is no longer available"); return; }
   showOverlayCard(a);
@@ -1285,8 +1310,8 @@ function closeOverlay() {
 }
 
 $("btn-ticker").onclick = enterTicker;
-$("ticker-exit").onclick = exitTicker;
-$("ticker").ondblclick = exitTicker;
+$("ticker-exit").onclick = () => exitTicker();
+$("ticker").ondblclick = () => exitTicker();
 $("ticker-settings").onclick = async () => { await exitTicker(); $("btn-settings").onclick(); };
 $("ticker-note").onclick = async () => {
   if ($("ticker-note").classList.contains("error")) { await exitTicker(); $("btn-settings").onclick(); }
