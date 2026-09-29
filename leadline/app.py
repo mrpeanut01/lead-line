@@ -50,9 +50,11 @@ def main():
         js_api=api,
         width=540,
         height=900,
-        min_size=(420, 640),
+        # small enough for the ticker strip; the reader restores its own size
+        min_size=(360, 60),
         background_color="#faf7f2",
     )
+    api._window = window
     if os.getenv("LEADLINE_SELFTEST"):
         threading.Thread(target=_selftest, args=(window,), daemon=True).start()
         webview.start(lambda: window.evaluate_js(

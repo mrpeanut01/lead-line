@@ -233,12 +233,12 @@ def _recent_error(provider, now):
 _cant_skip_thinking = set()   # models that return nothing with "think": false (gpt-oss)
 
 
-def _ollama_chat(base_url, model, prompt, skip_thinking):
+def _ollama_chat(base_url, model, prompt, skip_thinking, schema=SUMMARY_SCHEMA):
     body = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
-        "format": SUMMARY_SCHEMA,
+        "format": schema,
     }
     if skip_thinking:
         body["think"] = False
@@ -249,23 +249,27 @@ def _ollama_chat(base_url, model, prompt, skip_thinking):
     return resp.json()["message"]["content"]
 
 
-def call_ollama(prompt):
+def _ollama_generate(base_url, model, prompt, schema=SUMMARY_SCHEMA):
     """A summary doesn't need a reasoning pass, and thinking models (gemma4,
     qwen3) spend several times longer on one — so ask them to skip it. Models
     that can't (gpt-oss) answer empty; remember those and ask normally."""
-    base_url, model = target = _ollama_target()
-    _await_ollama(target)
     try:
         with _ollama_serial:
             skip = model not in _cant_skip_thinking
-            content = _ollama_chat(base_url, model, prompt, skip)
+            content = _ollama_chat(base_url, model, prompt, skip, schema)
             if skip and not content.strip():
                 _cant_skip_thinking.add(model)
-                content = _ollama_chat(base_url, model, prompt, False)
+                content = _ollama_chat(base_url, model, prompt, False, schema)
     except requests.RequestException:
         _wake.set()   # re-probe: the server may be down or have dropped the model
         raise
-    return _parse_summary(content)
+    return content
+
+
+def call_ollama(prompt):
+    base_url, model = target = _ollama_target()
+    _await_ollama(target)
+    return _parse_summary(_ollama_generate(base_url, model, prompt))
 
 
 def call_anthropic(prompt):
@@ -357,6 +361,75 @@ def backend_status():
         note = f"{config.setting('anthropic_model')} · {note}"
     return {"ollama": {"state": state, "detail": detail},
             "anthropic": {"state": claude, "detail": note}}
+
+
+# --- ticker (Ollama only, never routed through the fallback) ---
+
+TICKER_SCHEMA = {
+    "type": "object",
+    "properties": {"ticker": {"type": "string"}},
+    "required": ["ticker"],
+}
+
+TICKER_PROMPT = """You write lines for a scrolling news ticker, wire-service style.
+
+HEADLINE: {headline}
+DETAIL: {detail}
+
+Rewrite it as one ticker line: at most 8 words, facts only, present tense, the
+concrete subject and what happened. No teaser, no question, no trailing period.
+Return ONLY JSON: {{"ticker": "..."}}"""
+
+TICKER_MAX_WORDS = 8
+
+
+def ticker_error():
+    """Why the ticker can't condense right now, or None. The ticker uses Ollama
+    only, so Claude's state never matters here."""
+    base_url, model = target = _ollama_target()
+    if config.setting("ollama_role") == "off":
+        return "Ollama is off in settings; the ticker needs Ollama"
+    with _health:
+        state = _ollama["state"] if _ollama["target"] == target else "checking"
+        message = _ollama["message"]
+    if state == "unreachable":
+        return f"Ollama unreachable at {base_url}"
+    if state == "missing":
+        return f"{model} isn't installed on {base_url} (ollama pull {model})"
+    if state == "error":
+        return f"Couldn't load {model}: {message}"
+    if state == "ready" and (err := _recent_error("ticker", time.time())):
+        return f"Ticker line failed: {err}"
+    return None
+
+
+def condense_headline(article):
+    """<=8-word ticker line from the headline (the straight one if the story
+    has been summarized) and the feed's own description. No body fetch and no
+    full summary, so the on-demand summary rule holds. Fails fast instead of
+    waiting on a model load: the ticker retries on its next pass."""
+    base_url, model = target = _ollama_target()
+    if config.setting("ollama_role") == "off":
+        raise RuntimeError("Ollama is off")
+    note_demand()
+    if not ollama_ready():
+        raise RuntimeError("Ollama model not ready")
+    prompt = TICKER_PROMPT.format(
+        headline=article.get("straight_headline") or article.get("original_headline") or "",
+        detail=re.sub(r"<[^>]+>", " ", article.get("rss_description") or "")[:300].strip()
+               or "(none)")
+    try:
+        content = _ollama_generate(base_url, model, prompt, TICKER_SCHEMA)
+        match = re.search(r"\{.*\}", content, re.S)
+        line = json.loads(match.group(0))["ticker"] if match else ""
+        line = re.sub(r"\s+", " ", str(line)).strip().rstrip(".")
+        if not line:
+            raise ValueError("empty ticker line")
+    except Exception as e:
+        _last_error["ticker"] = (time.time(), _short_error(e))
+        raise RuntimeError(f"[ticker] {e}") from e
+    _last_error.pop("ticker", None)
+    return " ".join(line.split()[:TICKER_MAX_WORDS])
 
 
 def summarize(article, source_name):

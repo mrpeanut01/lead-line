@@ -257,6 +257,55 @@
     background: var(--color-card); cursor: pointer; font-size: 13px;
     font-weight: 600; color: var(--color-text);
   }
+  /* ---- ticker view: the window minimized to a scrolling strip (Ollama only) ---- */
+  #ticker { display: none; }
+  body.ticker #stack, body.ticker #progress-track, body.ticker #chrome,
+  body.ticker #toast, body.ticker #story-overlay { display: none !important; }
+  body.ticker #ticker {
+    display: flex; align-items: center; position: fixed; inset: 0;
+    background: var(--tk-bg); color: var(--tk-neutral);
+    font-size: var(--tk-font, 15px); font-family: var(--font-body);
+    user-select: none; -webkit-user-select: none;
+  }
+  #ticker[data-scheme="paper"] { --tk-bg: #faf7f2; --tk-fresh: #b8432f; --tk-neutral: #8c8378;
+                                 --tk-meta: #b3aa9d; --tk-edge: #e6dfd4; }
+  #ticker[data-scheme="night"] { --tk-bg: #1b1a18; --tk-fresh: #ffb454; --tk-neutral: #8f877c;
+                                 --tk-meta: #5f5850; --tk-edge: #2e2c29; }
+  #ticker[data-scheme="amber"] { --tk-bg: #120c02; --tk-fresh: #ffcf5a; --tk-neutral: #8a6a2a;
+                                 --tk-meta: #5a4418; --tk-edge: #2a1d06; }
+  #ticker[data-scheme="green"] { --tk-bg: #030d05; --tk-fresh: #6dff8a; --tk-neutral: #3d8a4c;
+                                 --tk-meta: #235a2f; --tk-edge: #0d2412; }
+  #ticker-viewport { flex: 1; overflow: hidden; height: 100%; position: relative;
+                     display: flex; align-items: center; }
+  #ticker-track { display: flex; white-space: nowrap; will-change: transform; }
+  .tk { cursor: pointer; padding-right: 3em; }
+  .tk .tk-line { font-weight: 600; }
+  .tk .tk-meta { color: var(--tk-meta); font-size: 0.8em; margin-left: 0.6em; }
+  .tk:hover .tk-line { text-decoration: underline; }
+  #ticker-note { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis;
+                 white-space: nowrap; font-size: 0.85em; padding: 0 12px; cursor: pointer;
+                 color: var(--tk-neutral); border-right: 1px solid var(--tk-edge); }
+  #ticker-note:empty { display: none; }
+  #ticker-note.error { color: #d9604f; font-weight: 600; }
+  #ticker-note .dot { display: inline-block; margin-right: 6px; vertical-align: 0; }
+  #ticker button {
+    flex: none; background: none; border: none; cursor: pointer;
+    color: var(--tk-meta); font-size: 1em; padding: 0 10px; height: 100%;
+    border-left: 1px solid var(--tk-edge);
+  }
+  #ticker button:hover { color: var(--tk-fresh); }
+
+  /* a story opened from the ticker that isn't in the stack: shown over it */
+  #story-overlay { display: none; position: fixed; inset: 0; z-index: 25;
+                   background: var(--color-card); overflow-y: auto; }
+  #story-overlay.open { display: block; }
+  #story-overlay .card { height: auto; min-height: 100vh; border: none; }
+  #story-overlay .close-story {
+    position: fixed; top: 12px; right: 16px; z-index: 26;
+    font-size: 13px; background: var(--color-card); color: var(--color-text-muted);
+    border: 1px solid var(--color-divider); border-radius: 17px;
+    padding: 8px 14px; cursor: pointer;
+  }
 </style>
 </head>
 <body>
@@ -268,6 +317,7 @@
     <span class="svc" id="svc-ollama"><span class="dot checking"></span>Ollama</span>
     <span class="svc" id="svc-anthropic"><span class="dot checking"></span>Claude</span>
   </button>
+  <button id="btn-ticker" title="Minimize to ticker (t)">&#9644;</button>
   <button id="btn-refresh" title="Get latest stories"><span>&#8635;</span></button>
   <button id="btn-settings" title="Sources &amp; settings">&#9881;</button>
 </div>
@@ -275,6 +325,15 @@
 <div id="toast" role="status" aria-live="polite"></div>
 
 <div id="stack"></div>
+
+<div id="ticker" data-scheme="paper">
+  <span id="ticker-note"></span>
+  <div id="ticker-viewport"><div id="ticker-track"></div></div>
+  <button id="ticker-settings" title="Ticker settings">&#9881;</button>
+  <button id="ticker-exit" title="Back to full view (double-click the ticker)">&#10530;</button>
+</div>
+
+<div id="story-overlay"></div>
 
 <div id="settings">
   <div class="inner">
@@ -329,6 +388,47 @@
       <select id="set-max-age"></select>
     </div>
     <div class="disc-status">Stories older than this are considered dated and not shown</div>
+
+    <h3>Ticker</h3>
+    <div class="disc-status" style="margin-left:0">The &#9644; button minimizes LeadLine to a scrolling
+      strip of condensed headlines, written by Ollama only.</div>
+    <div class="setting-row">
+      <label for="set-tk-count">Stories</label>
+      <select id="set-tk-count"></select>
+    </div>
+    <div class="setting-row">
+      <label for="set-tk-fade">Fade to neutral</label>
+      <select id="set-tk-fade"></select>
+    </div>
+    <div class="setting-row">
+      <label for="set-tk-maxage">Remove after</label>
+      <select id="set-tk-maxage"></select>
+    </div>
+    <div class="setting-row">
+      <label for="set-tk-poll">Check feeds every</label>
+      <select id="set-tk-poll"></select>
+    </div>
+    <div class="setting-row">
+      <label for="set-tk-speed">Scroll speed</label>
+      <input id="set-tk-speed" type="range" min="20" max="200" step="10">
+    </div>
+    <div class="setting-row">
+      <label for="set-tk-font">Text size</label>
+      <input id="set-tk-font" type="range" min="11" max="28" step="1">
+    </div>
+    <div class="setting-row">
+      <label for="set-tk-scheme">Colors</label>
+      <select id="set-tk-scheme">
+        <option value="paper">Paper</option>
+        <option value="night">Night</option>
+        <option value="amber">Amber terminal</option>
+        <option value="green">Green terminal</option>
+      </select>
+    </div>
+    <div class="setting-row">
+      <label for="set-tk-ontop">Always on top</label>
+      <input id="set-tk-ontop" type="checkbox" style="flex:none;height:auto">
+    </div>
     <div class="setting-row save-row">
       <button id="btn-save-settings">Save</button>
       <span class="disc-status" id="settings-saved"></span>
@@ -643,6 +743,9 @@ async function refreshSummariesInPlace() {
 document.addEventListener("keydown", e => {
   const stack = document.getElementById("stack");
   if (document.getElementById("settings").classList.contains("open")) return;
+  if (tickerOn) { if (e.key === "Escape") exitTicker(); return; }
+  if ($("story-overlay").classList.contains("open")) { if (e.key === "Escape") closeOverlay(); return; }
+  if (e.key === "t" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); enterTicker(); return; }
   if (["ArrowDown", " ", "PageDown", "j"].includes(e.key)) {
     e.preventDefault(); stack.scrollBy({ top: window.innerHeight, behavior: "smooth" });
   } else if (["ArrowUp", "PageUp", "k"].includes(e.key)) {
@@ -737,6 +840,7 @@ async function loadSettings() {
     $(id).dataset.saved = saved || "";
     $(id).innerHTML = ""; $(id).disabled = true;   // blank until discovered
   }
+  loadTickerSettings(s);
   $("settings-saved").textContent = "";
   discoverOllama();
   if (s.anthropic_api_key) discoverAnthropic();
@@ -793,13 +897,21 @@ $("btn-save-settings").onclick = async () => {
     anthropic_role: $("set-anthropic-role").value,
     read_ahead: parseInt($("set-read-ahead").value, 10),
     max_story_age_days: parseInt($("set-max-age").value, 10),
+    ticker_count: parseInt($("set-tk-count").value, 10),
+    ticker_fade_hours: parseInt($("set-tk-fade").value, 10),
+    ticker_max_age_hours: parseInt($("set-tk-maxage").value, 10),
+    ticker_poll_minutes: parseInt($("set-tk-poll").value, 10),
+    ticker_speed: parseInt($("set-tk-speed").value, 10),
+    ticker_font_px: parseInt($("set-tk-font").value, 10),
+    ticker_scheme: $("set-tk-scheme").value,
+    ticker_on_top: $("set-tk-ontop").checked,
   };
   // Model dropdowns only overwrite the saved model when something is selected
   for (const [id, key] of [["set-ollama-model", "ollama_model"],
                            ["set-anthropic-model", "anthropic_model"]]) {
     if ($(id).value) { updates[key] = $(id).value; $(id).dataset.saved = $(id).value; }
   }
-  await api().save_settings(updates);
+  applyTickerSettings(await api().save_settings(updates));
   readAhead = updates.read_ahead;
   if (updates.max_story_age_days !== maxAgeDays) {
     maxAgeDays = updates.max_story_age_days;
@@ -947,6 +1059,241 @@ async function pollAiStatus() {
 }
 $("ai-status").onclick = () => $("btn-settings").onclick();
 
+/* ---- ticker view (issue #2) --------------------------------------------
+   The window shrinks to a strip that scrolls the newest stories as <=8-word
+   wire lines. Lines come from Ollama only; stories it hasn't condensed yet
+   stay off the tape rather than showing the publisher's clickbait. Color runs
+   from the scheme's "fresh" hue to neutral as a story ages, and a story leaves
+   the tape once it passes the max age. Scrolling is at a constant reading
+   speed, so each story stays on screen for as long as its line takes to read. */
+const TITLE_BAR_PX = 28;         // native title bar kept for drag + resize
+let tickerOn = false;
+let tk = { count: 10, fadeH: 2, maxAgeH: 6, pollMin: 5, speed: 60, font: 15,
+           scheme: "paper", onTop: true };
+let tkItems = new Map();         // id -> item from get_ticker, newest first
+let tkOffset = 0, tkLast = 0, tkPaused = false, tkFrame = 0;
+let tkDataTimer = 0, tkPollTimer = 0, tkColorTimer = 0;
+
+function applyTickerSettings(s) {
+  tk = { count: s.ticker_count ?? 10, fadeH: s.ticker_fade_hours ?? 2,
+         maxAgeH: s.ticker_max_age_hours ?? 6, pollMin: s.ticker_poll_minutes ?? 5,
+         speed: s.ticker_speed ?? 60, font: s.ticker_font_px ?? 15,
+         scheme: s.ticker_scheme || "paper", onTop: s.ticker_on_top ?? true };
+  $("ticker").dataset.scheme = tk.scheme;
+  $("ticker").style.setProperty("--tk-font", tk.font + "px");
+}
+
+function tickerOptions(id, values, fmt) {
+  const sel = $(id);
+  if (sel.options.length) return;
+  for (const v of values) {
+    const opt = document.createElement("option");
+    opt.value = String(v); opt.textContent = fmt(v);
+    sel.appendChild(opt);
+  }
+}
+const hours = h => h === 1 ? "1 hour" : `${h} hours`;
+tickerOptions("set-tk-count", [3, 5, 10, 15, 20, 30], String);
+tickerOptions("set-tk-fade", [1, 2, 3, 4, 6, 12, 24], hours);
+tickerOptions("set-tk-maxage", [1, 2, 3, 4, 6, 12, 24, 48], hours);
+tickerOptions("set-tk-poll", [2, 5, 10, 15, 30, 60], m => `${m} minutes`);
+
+function loadTickerSettings(s) {
+  applyTickerSettings(s);
+  const pick = (id, v) => {
+    if (![...$(id).options].some(o => o.value === String(v))) {
+      const opt = document.createElement("option");
+      opt.value = String(v); opt.textContent = String(v);
+      $(id).appendChild(opt);
+    }
+    $(id).value = String(v);
+  };
+  pick("set-tk-count", tk.count);
+  pick("set-tk-fade", tk.fadeH);
+  pick("set-tk-maxage", tk.maxAgeH);
+  pick("set-tk-poll", tk.pollMin);
+  $("set-tk-speed").value = tk.speed;
+  $("set-tk-font").value = tk.font;
+  $("set-tk-scheme").value = tk.scheme;
+  $("set-tk-ontop").checked = !!tk.onTop;
+}
+
+/* 0 = just published, 1 = fully faded; items past max age are dropped */
+function tkAge(item) { return (Date.now() - new Date(item.pub_date)) / 3600000; }
+function tkColor(item) {
+  const t = Math.min(1, Math.max(0, tkAge(item) / tk.fadeH));
+  return `color-mix(in srgb, var(--tk-fresh) ${Math.round((1 - t) * 100)}%, var(--tk-neutral))`;
+}
+
+function tkBuild(item) {
+  const span = el("span", "tk");
+  span.dataset.id = item.id;
+  span.appendChild(el("span", "tk-line", esc(item.text)));
+  span.appendChild(el("span", "tk-meta", `${esc(item.source_name || "")} · ${timeAgo(item.pub_date)}`));
+  span.querySelector(".tk-line").style.color = tkColor(item);
+  span.onclick = () => openFromTicker(item.id);
+  return span;
+}
+
+/* newest stories that are still young enough, in tape order */
+function tkRotation() {
+  return [...tkItems.values()].filter(i => tkAge(i) < tk.maxAgeH).slice(0, tk.count);
+}
+
+/* keep the track at least two viewport widths long by appending the next
+   story in rotation order after whatever is last on the track */
+let tkNext = 0;
+function tkFill() {
+  const track = $("ticker-track");
+  const rotation = tkRotation();
+  if (!rotation.length) { track.innerHTML = ""; tkOffset = 0; return; }
+  const want = $("ticker-viewport").clientWidth * 2;
+  let guard = 0;
+  while (track.scrollWidth - tkOffset < want && guard++ < 200) {
+    track.appendChild(tkBuild(rotation[tkNext % rotation.length]));
+    tkNext = (tkNext + 1) % rotation.length;
+  }
+}
+
+function tkStep(ts) {
+  const dt = tkLast ? Math.min(0.1, (ts - tkLast) / 1000) : 0;
+  tkLast = ts;
+  const track = $("ticker-track");
+  if (!tkPaused && track.firstChild) {
+    tkOffset += tk.speed * dt;
+    const first = track.firstChild;
+    if (first && tkOffset >= first.offsetWidth) {   // scrolled fully off: recycle
+      tkOffset -= first.offsetWidth;
+      first.remove();
+    }
+    track.style.transform = `translateX(${-tkOffset}px)`;
+  }
+  tkFill();
+  if (tickerOn) tkFrame = requestAnimationFrame(tkStep);
+}
+
+function tkNote(text, cls, dotState) {
+  const n = $("ticker-note");
+  n.className = cls || "";
+  n.innerHTML = text ? (dotState ? `<span class="dot ${dotState}"></span>` : "") + esc(text) : "";
+  n.title = text || "";
+}
+
+async function tkRefresh() {
+  let res;
+  try { res = await api().get_ticker(); }
+  catch (e) { tkNote("Ticker unavailable: " + e, "error", "error"); return; }
+  tkItems = new Map(res.items.map(i => [i.id, i]));
+  // drop tape entries for stories no longer in rotation (aged out, feed off)
+  const live = new Set(tkRotation().map(i => i.id));
+  $("ticker-track").querySelectorAll(".tk").forEach(n => {
+    if (!live.has(n.dataset.id) && n.offsetLeft - tkOffset > $("ticker-viewport").clientWidth) n.remove();
+  });
+  if (res.error) {
+    tkNote(res.error, "error", "error");
+  } else if (res.ollama === "loading" || res.ollama === "checking" || res.ollama === "idle") {
+    tkNote(`Ollama model loading…${res.pending ? ` ${res.pending} waiting` : ""}`, "", "loading");
+  } else if (!res.items.length) {
+    tkNote(res.pending ? `Condensing ${res.pending} ${res.pending === 1 ? "story" : "stories"}…`
+                       : `No stories in the last ${hours(tk.maxAgeH)}`, "", "ready");
+  } else {
+    tkNote("");
+  }
+}
+
+function tkRecolor() {
+  $("ticker-track").querySelectorAll(".tk").forEach(n => {
+    const item = tkItems.get(n.dataset.id);
+    if (item) {
+      n.querySelector(".tk-line").style.color = tkColor(item);
+      n.querySelector(".tk-meta").textContent = `${item.source_name || ""} · ${timeAgo(item.pub_date)}`;
+    }
+  });
+}
+
+async function enterTicker() {
+  if (tickerOn) return;
+  tickerOn = true;
+  document.body.classList.add("ticker");
+  $("ticker-track").innerHTML = ""; tkOffset = 0; tkNext = 0; tkLast = 0;
+  tkNote("Starting ticker…", "", "checking");
+  await api().enter_ticker(Math.round(tk.font * 2.4) + TITLE_BAR_PX);
+  await tkRefresh();
+  tkDataTimer = setInterval(tkRefresh, 10000);   // local DB read only
+  tkColorTimer = setInterval(tkRecolor, 60000);
+  tkPollTimer = setInterval(async () => {   // the ticker looks for new stories itself
+    await api().get_latest();
+    tkRefresh();
+  }, tk.pollMin * 60000);
+  tkFrame = requestAnimationFrame(tkStep);
+}
+
+async function exitTicker() {
+  if (!tickerOn) return;
+  tickerOn = false;
+  cancelAnimationFrame(tkFrame);
+  [tkDataTimer, tkColorTimer, tkPollTimer].forEach(clearInterval);
+  document.body.classList.remove("ticker");
+  await api().exit_ticker();
+  refreshSummariesInPlace();
+}
+
+/* clicking a ticker story opens its AI summary card: scroll to it if it is
+   in the stack, otherwise show it over the stack (it may be read, or older
+   than the queue offers). A story not yet summarized is requested and the
+   card fills in when the summary lands. */
+let overlayTimer = 0;
+async function openFromTicker(id) {
+  await exitTicker();
+  const idx = cards.findIndex(c => c.id === id);
+  if (idx >= 0) {
+    const cardEl = document.querySelector(`.card[data-index="${idx}"]`);
+    if (cardEl) { $("stack").scrollTop = cardEl.offsetTop; return; }
+  }
+  const a = await api().get_card(id);
+  if (!a) { toast("That story is no longer available"); return; }
+  showOverlayCard(a);
+  if (!a.processed) {
+    api().request_summaries([id]);
+    clearInterval(overlayTimer);
+    overlayTimer = setInterval(async () => {
+      if (!$("story-overlay").classList.contains("open")) return clearInterval(overlayTimer);
+      const fresh = await api().get_card(id);
+      if (fresh && fresh.processed) { clearInterval(overlayTimer); showOverlayCard(fresh); }
+      else api().request_summaries([id]);   // backend skips it while in flight
+    }, 4000);
+  }
+}
+
+function showOverlayCard(a) {
+  const ov = $("story-overlay");
+  ov.innerHTML = "";
+  const card = buildCard(a, -1);
+  card.querySelector(".swipe-hint")?.remove();
+  ov.appendChild(card);
+  const close = el("button", "close-story", "Close &#10005;");
+  close.onclick = closeOverlay;
+  ov.appendChild(close);
+  ov.classList.add("open");
+  ov.scrollTop = 0;
+}
+
+function closeOverlay() {
+  clearInterval(overlayTimer);
+  $("story-overlay").classList.remove("open");
+  $("story-overlay").innerHTML = "";
+}
+
+$("btn-ticker").onclick = enterTicker;
+$("ticker-exit").onclick = exitTicker;
+$("ticker").ondblclick = exitTicker;
+$("ticker-settings").onclick = async () => { await exitTicker(); $("btn-settings").onclick(); };
+$("ticker-note").onclick = async () => {
+  if ($("ticker-note").classList.contains("error")) { await exitTicker(); $("btn-settings").onclick(); }
+};
+$("ticker-viewport").onmouseenter = () => { tkPaused = true; };
+$("ticker-viewport").onmouseleave = () => { tkPaused = false; };
+
 async function init() {
   const s = await api().get_settings();
   readAhead = s.read_ahead ?? 1;
@@ -954,7 +1301,8 @@ async function init() {
   pollAiStatus();
   setInterval(pollAiStatus, 2000);
   renderStack(await api().get_queue(100));
-  setInterval(refreshSummariesInPlace, 8000);
+  setInterval(() => { if (!tickerOn) refreshSummariesInPlace(); }, 8000);
+  applyTickerSettings(s);
 }
 window.addEventListener("pywebviewready", init);
 </script>
