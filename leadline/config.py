@@ -34,6 +34,10 @@ PAYWALL_WORD_THRESHOLD = int(os.getenv("PAYWALL_WORD_THRESHOLD", "200"))
 #   model is in memory, then secondary.
 # read_ahead: stories beyond the current card to summarize in advance (0-10).
 # max_story_age_days: stories older than this are not offered in the queue (1-30).
+# ticker_*: the minimized news-ticker view (Ollama only). count: newest stories on
+#   the tape; fade_hours: age at which a story's color reaches neutral;
+#   max_age_hours: age at which it leaves the tape; poll_minutes: feed poll
+#   cadence while the ticker is open; speed: px/s; font_px; scheme; on_top.
 _DEFAULTS = {
     "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
     "ollama_model": os.getenv("OLLAMA_MODEL", "phi4:14b"),
@@ -43,7 +47,28 @@ _DEFAULTS = {
     "anthropic_role": os.getenv("ANTHROPIC_ROLE", "secondary"),
     "read_ahead": int(os.getenv("READ_AHEAD", "1")),
     "max_story_age_days": int(os.getenv("MAX_STORY_AGE_DAYS", "3")),
+    "ticker_count": 10,
+    "ticker_fade_hours": 2,
+    "ticker_max_age_hours": 6,
+    "ticker_poll_minutes": 5,
+    "ticker_speed": 60,
+    "ticker_font_px": 15,
+    "ticker_scheme": "paper",
+    "ticker_on_top": True,
 }
+# name -> (min, max) for the integer settings; out-of-range values are clamped,
+# unparseable ones reset to the default.
+_INT_RANGES = {
+    "read_ahead": (0, 10),
+    "max_story_age_days": (1, 30),
+    "ticker_count": (3, 30),
+    "ticker_fade_hours": (1, 24),
+    "ticker_max_age_hours": (1, 48),
+    "ticker_poll_minutes": (2, 60),
+    "ticker_speed": (20, 200),
+    "ticker_font_px": (11, 28),
+}
+TICKER_SCHEMES = ("paper", "night", "amber", "green")
 ROLES = {
     "ollama_role": ("primary", "secondary", "off"),
     "anthropic_role": ("primary", "primary_during_load", "secondary", "off"),
@@ -67,14 +92,22 @@ def save_settings(updates):
     except (OSError, ValueError):
         pass
     current.update({k: v for k, v in updates.items() if k in _DEFAULTS})
-    try:
-        current["read_ahead"] = max(0, min(10, int(current.get("read_ahead", 1))))
-    except (TypeError, ValueError):
-        current["read_ahead"] = 1
-    try:
-        current["max_story_age_days"] = max(1, min(30, int(current.get("max_story_age_days", 3))))
-    except (TypeError, ValueError):
-        current["max_story_age_days"] = 3
+    for k, (lo, hi) in _INT_RANGES.items():
+        if k not in current:
+            continue
+        try:
+            current[k] = max(lo, min(hi, int(current[k])))
+        except (TypeError, ValueError):
+            current[k] = _DEFAULTS[k]
+    if "ticker_max_age_hours" in current or "ticker_fade_hours" in current:
+        # a story can't leave the tape before it has finished fading
+        fade = current.get("ticker_fade_hours", _DEFAULTS["ticker_fade_hours"])
+        current["ticker_max_age_hours"] = max(
+            fade, current.get("ticker_max_age_hours", _DEFAULTS["ticker_max_age_hours"]))
+    if "ticker_scheme" in current and current["ticker_scheme"] not in TICKER_SCHEMES:
+        current["ticker_scheme"] = _DEFAULTS["ticker_scheme"]
+    if "ticker_on_top" in current:
+        current["ticker_on_top"] = bool(current["ticker_on_top"])
     for k, allowed in ROLES.items():
         if current.get(k) not in allowed:
             current[k] = _DEFAULTS[k]

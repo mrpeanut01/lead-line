@@ -87,7 +87,7 @@ jobs:
           python -m venv .venv
           .venv/bin/pip install -r requirements.txt pyinstaller
 
-      - name: Build (ad-hoc signed .app + zip)
+      - name: Build (ad-hoc signed .app + zip + dmg)
         run: ./build_app.sh
 
       - name: Smoke test (app starts and creates its data dir)
@@ -100,13 +100,24 @@ jobs:
           test -f "$LEADLINE_DATA_DIR/leadline.db" || { echo "no database created"; exit 1; }
           kill "$APP_PID"
 
+      - name: Verify DMG (mounts, holds a valid signed app)
+        run: |
+          hdiutil verify dist/LeadLine-*-mac.dmg
+          MNT=$(mktemp -d)
+          hdiutil attach dist/LeadLine-*-mac.dmg -nobrowse -readonly -mountpoint "$MNT"
+          codesign --verify --deep --strict "$MNT/LeadLine.app"
+          test -L "$MNT/Applications"
+          hdiutil detach "$MNT"
+
       - uses: actions/upload-artifact@v4
         with:
           name: LeadLine-macos
-          path: dist/LeadLine-*-mac.zip
+          path: |
+            dist/LeadLine-*-mac.zip
+            dist/LeadLine-*-mac.dmg
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$GITHUB_REF_NAME" dist/LeadLine-*-mac.zip --clobber
+        run: gh release upload "$GITHUB_REF_NAME" dist/LeadLine-*-mac.zip dist/LeadLine-*-mac.dmg --clobber

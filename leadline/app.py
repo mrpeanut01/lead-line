@@ -31,8 +31,20 @@ def _selftest(window):
     time.sleep(10)
     try:
         cards = window.evaluate_js("document.querySelectorAll('.card').length")
+        # ticker round trip: the strip shows headlines or, with no Ollama, an error
+        window.evaluate_js("enterTicker()")
+        time.sleep(4)
+        strip = window.height
+        ticker = window.evaluate_js(
+            "document.body.classList.contains('ticker') && "
+            "(document.querySelectorAll('#ticker-track .tk').length > 0 || "
+            "!!document.getElementById('ticker-note').textContent)")
+        window.evaluate_js("exitTicker()")
+        time.sleep(2)
         errs = window.evaluate_js("window.__errs || []")
-        print(f"SELFTEST cards={cards} errors={errs}", flush=True)
+        ok = ticker and strip < 200 and window.height >= 640
+        print(f"SELFTEST cards={cards} ticker={'ok' if ok else 'FAIL'} "
+              f"errors={errs}", flush=True)
     except Exception as e:
         print(f"SELFTEST FAIL: {e}", flush=True)
     window.destroy()
@@ -50,9 +62,11 @@ def main():
         js_api=api,
         width=540,
         height=900,
-        min_size=(420, 640),
+        # small enough for the ticker strip; the reader restores its own size
+        min_size=(360, 60),
         background_color="#faf7f2",
     )
+    api._window = window
     if os.getenv("LEADLINE_SELFTEST"):
         threading.Thread(target=_selftest, args=(window,), daemon=True).start()
         webview.start(lambda: window.evaluate_js(

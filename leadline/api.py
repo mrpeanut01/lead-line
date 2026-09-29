@@ -25,6 +25,11 @@ class Api:
         self._summarize_lock = threading.Lock()
         self._inflight = set()
         self._failed = {}    # article id -> time its summary last failed
+        self._ticker_lock = threading.Lock()
+        self._ticker_busy = False
+        self._ticker_failed = {}   # article id -> time its ticker line last failed
+        self._window = None        # set by app.main(); private so JS can't reach it
+        self._reader_geometry = None
 
     # --- queue / cards ---
 
@@ -45,6 +50,10 @@ class Api:
             article = store.get_article(article_id)
         return {"body": article["body_text"] or "",
                 "is_paywalled": bool(article["is_paywalled"])}
+
+    def get_card(self, article_id):
+        """A single story's card, e.g. one picked from the ticker tape."""
+        return store.get_card(article_id)
 
     def mark_read(self, article_id):
         store.mark_read(article_id)
@@ -76,6 +85,69 @@ class Api:
 
         threading.Thread(target=run, daemon=True).start()
         return {"queued": len(ids)}
+
+    # --- ticker view (Ollama only) ---
+
+    def get_ticker(self):
+        """The newest stories for the ticker tape. Only stories Ollama has
+        condensed are returned; the rest are condensed in the background, one
+        at a time, and show up on a later call. Never blocks on the model."""
+        count = config.setting("ticker_count")
+        rows = store.get_ticker(count, config.setting("ticker_max_age_hours"))
+        now = time.time()
+        with self._ticker_lock:
+            todo = [r for r in rows if not r["ticker_headline"]
+                    and now - self._ticker_failed.get(r["id"], 0) > SUMMARY_RETRY_SECONDS]
+            start = bool(todo) and not self._ticker_busy
+            if start:
+                self._ticker_busy = True
+        if start:
+            threading.Thread(target=self._condense, args=(todo,), daemon=True).start()
+        return {
+            "items": [{"id": r["id"], "text": r["ticker_headline"],
+                       "source_name": r["source_name"], "pub_date": r["pub_date"],
+                       "canonical_url": r["canonical_url"]}
+                      for r in rows if r["ticker_headline"]],
+            "pending": sum(1 for r in rows if not r["ticker_headline"]),
+            "ollama": ai.backend_status()["ollama"]["state"],
+            "error": ai.ticker_error(),
+        }
+
+    def _condense(self, rows):
+        try:
+            for r in rows:   # newest first, so the top of the tape fills first
+                if not ai.ollama_ready():
+                    ai.note_demand()
+                    break        # model not loaded yet; the next call starts over
+                try:
+                    store.save_ticker_headline(r["id"], ai.condense_headline(r))
+                except RuntimeError:
+                    with self._ticker_lock:
+                        self._ticker_failed[r["id"]] = time.time()
+        finally:
+            with self._ticker_lock:
+                self._ticker_busy = False
+
+    def enter_ticker(self, height):
+        """Shrink the window to a strip; remember the reader's size to restore."""
+        w = self._window
+        if not w:
+            return False
+        self._reader_geometry = (w.width, w.height)
+        w.on_top = bool(config.setting("ticker_on_top"))
+        w.resize(max(w.width, 640), int(height))
+        return True
+
+    def exit_ticker(self):
+        w = self._window
+        if not w:
+            return False
+        w.on_top = False
+        width, height = self._reader_geometry or (540, 900)
+        # resize keeps the top-left fixed; no move(), whose coordinates are
+        # monitor-relative on some platforms while x/y are absolute
+        w.resize(max(width, 420), max(height, 640))
+        return True
 
     def open_source(self, url):
         """Source link opens the publisher in the system browser (spec §2)."""
@@ -117,6 +189,8 @@ class Api:
         settings = config.save_settings(updates)
         with self._summarize_lock:
             self._failed.clear()   # a fixed key or server should retry right away
+        with self._ticker_lock:
+            self._ticker_failed.clear()
         ai.settings_changed()
         return settings
 

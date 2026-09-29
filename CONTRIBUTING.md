@@ -35,7 +35,9 @@ leadline/
 Design rules worth knowing before you patch:
 
 - **Summarize on demand only.** Articles are summarized when they enter the reader's
-  read-ahead window (`request_summaries`), never in bulk from the pipeline.
+  read-ahead window (`request_summaries`), never in bulk from the pipeline. The ticker
+  view's one-line condensations (`get_ticker`) are limited to the stories on its tape and
+  go to Ollama only, never through the Claude fallback.
 - **Bodies are transient.** Extracted article text is TTL-purged (default 24 h); only
   summaries and headlines persist. Don't add long-term full-text storage.
 - **Respect publishers.** robots.txt stays on; attribution stays prominent.
@@ -65,5 +67,5 @@ repo, chmod 600. CI/history is scanned before releases; keep it that way.
 - Match the existing style: small modules, docstrings that cite the spec section they
   implement, no comment noise.
 - Update `README.md` if you change settings, controls, or behavior.
-- Releases: bump `leadline/__init__.__version__`, run `./build_app.sh`, zip
-  `dist/LeadLine.app`, and attach it to a tagged GitHub release.
+- Releases: bump `leadline/__init__.__version__` and push a `v<version>` tag; CI builds the
+  mac `.dmg` and `.zip` and the Windows `.zip` and attaches them to the release.

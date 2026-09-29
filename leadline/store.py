@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS articles (
     card_image_url TEXT,
     is_read INTEGER DEFAULT 0,
     ai_processed_at TEXT,
-    created_at TEXT
+    created_at TEXT,
+    ticker_headline TEXT        -- <=8-word wire line for the ticker view (Ollama only)
 );
 CREATE INDEX IF NOT EXISTS idx_articles_queue ON articles (is_read, processed, pub_date);
 """
@@ -77,6 +78,9 @@ def _connect():
         _conn.row_factory = sqlite3.Row
         _conn.executescript(SCHEMA)
         _conn.executescript(DEDUP_MIGRATION)
+        cols = {r[1] for r in _conn.execute("PRAGMA table_info(articles)")}
+        if "ticker_headline" not in cols:   # databases from before the ticker
+            _conn.execute("ALTER TABLE articles ADD COLUMN ticker_headline TEXT")
         _conn.commit()
     return _conn
 
@@ -240,7 +244,7 @@ def get_queue(limit=50):
     sources take turns — each source's newest story, then each one's
     second-newest, and so on — so a prolific feed can't crowd the others out
     while yesterday's news never outranks today's. Stories older than the
-    max_story_age_days setting are not offered."""
+    max_story_age_days setting, or from disabled/removed feeds, are not offered."""
     rows = query(
         "SELECT * FROM ("
         "  SELECT a.*, f.name AS source_name, "
@@ -248,8 +252,8 @@ def get_queue(limit=50):
         "    (PARTITION BY a.feed_source_id, substr(a.pub_date, 1, 10) "
         "     ORDER BY a.pub_date DESC) AS source_rank "
         "  FROM articles a "
-        "  LEFT JOIN feed_sources f ON f.id = a.feed_source_id "
-        "  WHERE a.is_read = 0 AND a.pub_date >= ?"
+        "  JOIN feed_sources f ON f.id = a.feed_source_id "
+        "  WHERE a.is_read = 0 AND f.enabled = 1 AND a.pub_date >= ?"
         ") ORDER BY day DESC, source_rank, pub_date DESC LIMIT ?",
         (_story_age_cutoff(), limit))
     for r in rows:
@@ -257,6 +261,32 @@ def get_queue(limit=50):
         r.pop("source_rank", None)
         r.pop("day", None)
     return rows
+
+
+def get_ticker(limit, max_age_hours):
+    """Newest stories for the ticker tape, read or not (it's a tape, not a
+    queue), from enabled feeds and no older than the ticker's max age."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
+    return query(
+        "SELECT a.id, a.canonical_url, a.pub_date, a.ticker_headline, "
+        "       a.straight_headline, a.original_headline, a.rss_description, "
+        "       f.name AS source_name "
+        "FROM articles a JOIN feed_sources f ON f.id = a.feed_source_id "
+        "WHERE f.enabled = 1 AND a.pub_date >= ? "
+        "ORDER BY a.pub_date DESC LIMIT ?", (cutoff, limit))
+
+
+def save_ticker_headline(article_id, text):
+    execute("UPDATE articles SET ticker_headline = ? WHERE id = ?", (text, article_id))
+
+
+def get_card(article_id):
+    """One story in card shape (as get_queue returns them), read or not."""
+    rows = query(
+        "SELECT a.*, f.name AS source_name FROM articles a "
+        "LEFT JOIN feed_sources f ON f.id = a.feed_source_id WHERE a.id = ?",
+        (article_id,))
+    return _decode_card(rows[0]) if rows else None
 
 
 def get_article(article_id):

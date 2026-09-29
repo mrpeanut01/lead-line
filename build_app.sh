@@ -1,5 +1,6 @@
 #!/bin/sh
-# Build, sign, and package LeadLine.app (requires: .venv with requirements + pyinstaller)
+# Build, sign, and package LeadLine.app as a zip and a drag-to-Applications DMG
+# (requires: .venv with requirements + pyinstaller)
 # Version comes from leadline/__init__.py via LeadLine.spec.
 #
 # Signing happens in a temp dir outside the project tree: cloud-synced folders
@@ -19,8 +20,15 @@ codesign --force --deep --sign - "$TMP/LeadLine.app"
 codesign --verify --deep --strict "$TMP/LeadLine.app"
 ditto -c -k --norsrc --noextattr --noacl --keepParent "$TMP/LeadLine.app" "$TMP/LeadLine-$VERSION-mac.zip"
 
+# DMG: the app next to an Applications shortcut, compressed read-only
+mkdir "$TMP/dmg"
+ditto --norsrc --noextattr --noacl "$TMP/LeadLine.app" "$TMP/dmg/LeadLine.app"
+ln -s /Applications "$TMP/dmg/Applications"
+hdiutil create -volname "LeadLine $VERSION" -srcfolder "$TMP/dmg" -fs HFS+ \
+    -format UDZO -ov "$TMP/LeadLine-$VERSION-mac.dmg"
+
 rm -rf dist/LeadLine.app
 ditto --norsrc --noextattr --noacl "$TMP/LeadLine.app" dist/LeadLine.app
-cp "$TMP/LeadLine-$VERSION-mac.zip" dist/
+cp "$TMP/LeadLine-$VERSION-mac.zip" "$TMP/LeadLine-$VERSION-mac.dmg" dist/
 
-echo "Built and signed: dist/LeadLine.app + dist/LeadLine-$VERSION-mac.zip (v$VERSION)"
+echo "Built and signed: dist/LeadLine.app + dist/LeadLine-$VERSION-mac.{zip,dmg} (v$VERSION)"
