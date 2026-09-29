@@ -435,6 +435,7 @@
     </div>
 
     <h3>Status</h3>
+    <div class="disc-status">Keys: j/k or Space next/previous, t ticker, Esc close</div>
     <div id="ai-detail"></div>
     <div id="status-line">Loading…</div>
     <h3>Feed Sources</h3>
@@ -450,7 +451,8 @@
       <input id="new-feed-url" placeholder="RSS URL">
       <button id="btn-add-feed">Add</button>
     </div>
-    <div class="close-row"><button id="btn-close-settings">Done</button></div>
+    <div class="disc-status" id="add-feed-status" aria-live="polite"></div>
+    <div class="close-row"><button id="btn-close-settings" title="Save and close (Esc)">Done</button></div>
   </div>
 </div>
 
@@ -539,7 +541,7 @@ function buildCard(a, index) {
   footer.appendChild(expand);
 
   if (index === 0 && !hintFaded) {
-    footer.appendChild(el("div", "swipe-hint", "&#8593; scroll for next story"));
+    footer.appendChild(el("div", "swipe-hint", "&#8593; scroll or press j / Space for next story"));
   }
   inner.appendChild(footer);
   card.appendChild(inner);
@@ -759,15 +761,29 @@ async function refreshSummariesInPlace() {
 /* keyboard: arrows / space advance the stack */
 document.addEventListener("keydown", e => {
   const stack = document.getElementById("stack");
-  if (document.getElementById("settings").classList.contains("open")) return;
+  if (document.getElementById("settings").classList.contains("open")) {
+    if (e.key === "Escape") $("btn-close-settings").onclick();
+    return;
+  }
   if (tickerOn) { if (e.key === "Escape") exitTicker(); return; }
   if ($("story-overlay").classList.contains("open")) { if (e.key === "Escape") closeOverlay(); return; }
-  if (e.key === "t" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); enterTicker(); return; }
-  if (["ArrowDown", " ", "PageDown", "j"].includes(e.key)) {
-    e.preventDefault(); stack.scrollBy({ top: window.innerHeight, behavior: "smooth" });
-  } else if (["ArrowUp", "PageUp", "k"].includes(e.key)) {
-    e.preventDefault(); stack.scrollBy({ top: -window.innerHeight, behavior: "smooth" });
+  if (e.key === "t" && !e.metaKey && !e.ctrlKey && !e.target.closest("input, select")) {
+    e.preventDefault(); enterTicker(); return;
   }
+  // let a focused button/link/field handle its own Space/Enter
+  if ((e.key === " " || e.key === "Enter") && e.target.closest("button, a, input, select")) return;
+  // an expanded article scrolls itself before the stack moves on
+  const cur = document.querySelector(`.card.expanded[data-index="${currentIndex}"]`);
+  if (e.key === "Escape" && cur) { cur.querySelector(".expand-actions button").click(); return; }
+  const down = ["ArrowDown", " ", "PageDown", "j"].includes(e.key);
+  const up = ["ArrowUp", "PageUp", "k"].includes(e.key);
+  if (!down && !up) return;
+  e.preventDefault();
+  if (cur && (down ? cur.scrollTop + cur.clientHeight < cur.scrollHeight - 2 : cur.scrollTop > 0)) {
+    cur.scrollBy({ top: (down ? 1 : -1) * cur.clientHeight * 0.9, behavior: "smooth" });
+    return;
+  }
+  stack.scrollBy({ top: (down ? 1 : -1) * window.innerHeight, behavior: "smooth" });
 });
 
 /* settings */
@@ -780,9 +796,9 @@ async function renderFeeds() {
     const row = el("div", "feed-row");
     const cb = el("input");
     cb.type = "checkbox"; cb.checked = !!f.enabled;
-    cb.onchange = () => api().set_feed_enabled(f.id, cb.checked);
+    cb.onchange = () => { feedsChanged = true; api().set_feed_enabled(f.id, cb.checked); };
     const rm = el("button", "", "Remove");
-    rm.onclick = async () => { await api().remove_feed(f.id); renderFeeds(); };
+    rm.onclick = async () => { feedsChanged = true; await api().remove_feed(f.id); renderFeeds(); };
     row.appendChild(cb);
     row.appendChild(el("span", "feed-name", esc(f.name)));
     row.appendChild(el("span", "feed-url", esc(f.rss_url)));
@@ -859,6 +875,7 @@ async function loadSettings() {
   }
   loadTickerSettings(s);
   $("settings-saved").textContent = "";
+  settingsDirty = false;
   discoverOllama();
   if (s.anthropic_api_key) discoverAnthropic();
   else $("anthropic-disc-status").textContent = "";
@@ -929,6 +946,7 @@ $("btn-save-settings").onclick = async () => {
     if ($(id).value) { updates[key] = $(id).value; $(id).dataset.saved = $(id).value; }
   }
   applyTickerSettings(await api().save_settings(updates));
+  settingsDirty = false;
   readAhead = updates.read_ahead;
   if (updates.max_story_age_days !== maxAgeDays) {
     maxAgeDays = updates.max_story_age_days;
@@ -942,12 +960,27 @@ $("btn-save-settings").onclick = async () => {
   setTimeout(() => { $("settings-saved").textContent = ""; }, 2500);
 };
 
+/* Save covers the fields above it; feed changes apply at once. Done saves
+   pending edits instead of dropping them, and rebuilds the stack if feeds changed */
+let settingsDirty = false, feedsChanged = false;
+document.querySelector("#settings .inner").addEventListener("input", markDirty);
+document.querySelector("#settings .inner").addEventListener("change", markDirty);
+function markDirty(e) {
+  if (e.target.closest("#feed-list, #catalog-row, #add-feed")) return;
+  settingsDirty = true;
+  $("settings-saved").textContent = "Unsaved changes";
+}
+
 document.getElementById("btn-settings").onclick = () => {
   document.getElementById("settings").classList.add("open");
+  feedsChanged = false;
   loadSettings(); renderFeeds().then(loadCatalog); renderStatus();
 };
-document.getElementById("btn-close-settings").onclick = () =>
+document.getElementById("btn-close-settings").onclick = async () => {
+  if (settingsDirty) await $("btn-save-settings").onclick();
   document.getElementById("settings").classList.remove("open");
+  if (feedsChanged) { feedsChanged = false; renderStack(await api().get_queue(100)); }
+};
 /* feed catalog (bundled awesome-rss-feeds snapshot): category -> feed -> Add */
 let catalog = null;
 let existingFeedUrls = new Set();
@@ -1009,10 +1042,19 @@ $("btn-add-catalog").onclick = async () => {
 document.getElementById("btn-add-feed").onclick = async () => {
   const name = document.getElementById("new-feed-name").value.trim();
   const url = document.getElementById("new-feed-url").value.trim();
-  if (!name || !url) return;
-  await api().add_feed(name, url);
+  const status = $("add-feed-status");
+  if (!name || !url) {
+    status.textContent = "Enter a name and an RSS URL";
+    $(name ? "new-feed-url" : "new-feed-name").focus();
+    return;
+  }
+  if (existingFeedUrls.has(url)) { status.textContent = "That feed is already in your sources"; return; }
+  const btn = $("btn-add-feed");
+  btn.disabled = true;
+  try { await api().add_feed(name, url); } finally { btn.disabled = false; }
   document.getElementById("new-feed-name").value = "";
   document.getElementById("new-feed-url").value = "";
+  status.textContent = `Added ${name} ✓`;
   renderFeeds();
 };
 /* transient notice at the bottom of the window */

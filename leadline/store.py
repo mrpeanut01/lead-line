@@ -244,7 +244,7 @@ def get_queue(limit=50):
     sources take turns — each source's newest story, then each one's
     second-newest, and so on — so a prolific feed can't crowd the others out
     while yesterday's news never outranks today's. Stories older than the
-    max_story_age_days setting are not offered."""
+    max_story_age_days setting, or from disabled/removed feeds, are not offered."""
     rows = query(
         "SELECT * FROM ("
         "  SELECT a.*, f.name AS source_name, "
@@ -252,8 +252,8 @@ def get_queue(limit=50):
         "    (PARTITION BY a.feed_source_id, substr(a.pub_date, 1, 10) "
         "     ORDER BY a.pub_date DESC) AS source_rank "
         "  FROM articles a "
-        "  LEFT JOIN feed_sources f ON f.id = a.feed_source_id "
-        "  WHERE a.is_read = 0 AND a.pub_date >= ?"
+        "  JOIN feed_sources f ON f.id = a.feed_source_id "
+        "  WHERE a.is_read = 0 AND f.enabled = 1 AND a.pub_date >= ?"
         ") ORDER BY day DESC, source_rank, pub_date DESC LIMIT ?",
         (_story_age_cutoff(), limit))
     for r in rows:
