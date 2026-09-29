@@ -549,7 +549,9 @@ function buildCard(a, index) {
 async function expandCard(card, a, btn) {
   if (card.classList.contains("expanded")) return;
   btn.disabled = true; btn.textContent = "Loading…";
-  const res = await api().get_body(a.id);
+  let res;
+  try { res = await api().get_body(a.id); }
+  catch (e) { res = { body: "" }; }   // extraction failed — offer the source link
   const expand = card.querySelector(".body-expand");
   expand.innerHTML = "";
   const paras = (res.body || "").split(/\n\n+/).filter(p => p.trim());
@@ -678,9 +680,15 @@ async function showBacklog() {
   ensureSummaries(currentIndex);
 }
 
+let stackGen = 0;   // bumped on every full render; in-flight refreshes bail out
+
 function renderStack(list) {
   const stack = document.getElementById("stack");
   stack.innerHTML = "";
+  // drop the old cards and offset, or the observer marks new cards 0..n read
+  observer.disconnect();
+  stack.scrollTop = 0;
+  stackGen++;
   cards = list;
   renderedIds = new Set(list.map(a => a.id));
   maxSeenIndex = 0;
@@ -703,16 +711,25 @@ function renderStack(list) {
    without this the stack only changes on launch or manual ⟳, and once the
    reader catches up it looks frozen (nothing left to scroll). */
 async function refreshSummariesInPlace() {
+  const gen = stackGen;
   const latest = await api().get_queue(100);
+  if (gen !== stackGen) return;
   if (!cards.length && latest.length) {
     renderStack(latest);
     return;
   }
   const byId = Object.fromEntries(latest.map(a => [a.id, a]));
+  // requested cards outside the queue (revealed backlog, past the first 100)
+  const missing = cards.filter(c => c._requested && !c.processed && !byId[c.id]);
+  const extra = await Promise.all(missing.map(c => api().get_card(c.id).catch(() => null)));
+  if (gen !== stackGen) return;
+  for (const a of extra) if (a) byId[a.id] = a;
   document.querySelectorAll(".card:not(.end-card)").forEach(cardEl => {
     const idx = parseInt(cardEl.dataset.index, 10);
     const current = cards[idx];
     const updated = byId[cardEl.dataset.id];
+    // don't yank a card the reader has open (or is opening); swap it later
+    if (cardEl.classList.contains("expanded") || cardEl.querySelector(".read-full:disabled")) return;
     if (current && updated && !current.processed && updated.processed) {
       cards[idx] = Object.assign(updated, { _read: current._read, _requested: current._requested });
       const fresh = buildCard(cards[idx], idx);
