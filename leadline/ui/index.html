@@ -9,7 +9,7 @@
     --color-card: #fffdf9;
     --color-text: #1f1c18;
     --color-text-muted: #6f675c;
-    --color-text-faint: #a39a8d;
+    --color-text-faint: #766e63;
     --color-divider: #e6dfd4;
     --color-accent-bar: #d8d2c6;
     --font-display: ui-serif, "New York", Georgia, serif;
@@ -173,7 +173,7 @@
   .dot.idle, .dot.degraded { --dot: #c9953a; }
   .dot.idle, .dot.checking { background: none; }
   .dot.unreachable, .dot.missing, .dot.error { --dot: #c0564b; }
-  .dot.off { --dot: #dcd5ca; }
+  .dot.off { --dot: #b9b0a3; }
   @keyframes pulse { 50% { opacity: 0.25; } }
 
   /* one-line transient notices, e.g. "No new stories" */
@@ -317,9 +317,9 @@
     <span class="svc" id="svc-ollama"><span class="dot checking"></span>Ollama</span>
     <span class="svc" id="svc-anthropic"><span class="dot checking"></span>Claude</span>
   </button>
-  <button id="btn-ticker" title="Minimize to ticker (t)">&#9644;</button>
-  <button id="btn-refresh" title="Get latest stories"><span>&#8635;</span></button>
-  <button id="btn-settings" title="Sources &amp; settings">&#9881;</button>
+  <button id="btn-ticker" title="Minimize to ticker (t)" aria-label="Minimize to ticker"><span aria-hidden="true">&#9644;</span></button>
+  <button id="btn-refresh" title="Get latest stories" aria-label="Get latest stories"><span aria-hidden="true">&#8635;</span></button>
+  <button id="btn-settings" title="Sources &amp; settings" aria-label="Sources and settings"><span aria-hidden="true">&#9881;</span></button>
 </div>
 
 <div id="toast" role="status" aria-live="polite"></div>
@@ -329,8 +329,8 @@
 <div id="ticker" data-scheme="paper">
   <span id="ticker-note"></span>
   <div id="ticker-viewport"><div id="ticker-track"></div></div>
-  <button id="ticker-settings" title="Ticker settings">&#9881;</button>
-  <button id="ticker-exit" title="Back to full view (double-click the ticker)">&#10530;</button>
+  <button id="ticker-settings" title="Ticker settings" aria-label="Ticker settings">&#9881;</button>
+  <button id="ticker-exit" title="Back to full view (double-click the ticker)" aria-label="Back to full view">&#10530;</button>
 </div>
 
 <div id="story-overlay"></div>
@@ -355,7 +355,7 @@
     <div class="setting-row">
       <label for="set-ollama-model">Ollama model</label>
       <select id="set-ollama-model" disabled></select>
-      <button class="disc-btn" id="btn-disc-ollama" title="Discover models on server">&#8635;</button>
+      <button class="disc-btn" id="btn-disc-ollama" title="Discover models on server" aria-label="Discover Ollama models"><span aria-hidden="true">&#8635;</span></button>
     </div>
     <div class="disc-status" id="ollama-disc-status"></div>
     <div class="setting-row">
@@ -375,7 +375,7 @@
     <div class="setting-row">
       <label for="set-anthropic-model">Anthropic model</label>
       <select id="set-anthropic-model" disabled></select>
-      <button class="disc-btn" id="btn-disc-anthropic" title="Discover models for key">&#8635;</button>
+      <button class="disc-btn" id="btn-disc-anthropic" title="Discover models for key" aria-label="Discover Anthropic models"><span aria-hidden="true">&#8635;</span></button>
     </div>
     <div class="disc-status" id="anthropic-disc-status"></div>
     <div class="setting-row">
@@ -1063,16 +1063,18 @@ $("btn-refresh").onclick = getLatest;
    covering for it (the backend snapshot is in-memory, no network) */
 async function pollAiStatus() {
   const s = await api().get_ai_status();
-  const lines = [];
+  const lines = [], parts = [];
   for (const [key, label] of [["ollama", "Ollama"], ["anthropic", "Claude"]]) {
     const { state, detail } = s[key];
     const svc = $(`svc-${key}`);
     svc.querySelector(".dot").className = `dot ${state}`;
     svc.classList.toggle("off", state === "off");
     svc.title = `${label}: ${detail}`;
+    parts.push(svc.title);
     lines.push(`<span class="dot ${state}"></span> ${label}: ${esc(detail)}`);
   }
   $("ai-detail").innerHTML = lines.join("<br>");
+  $("ai-status").setAttribute("aria-label", "AI status. " + parts.join(". "));
 }
 $("ai-status").onclick = () => $("btn-settings").onclick();
 
