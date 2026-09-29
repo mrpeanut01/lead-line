@@ -18,8 +18,9 @@ a small read-ahead window.
 
 ### macOS
 
-Download `LeadLine-<version>-mac.zip` from [Releases](https://github.com/mrpeanut01/lead-line/releases),
-unzip, and drag `LeadLine.app` to Applications.
+Download `LeadLine-<version>-mac.dmg` from [Releases](https://github.com/mrpeanut01/lead-line/releases),
+open it, and drag `LeadLine.app` onto the Applications shortcut. (A `LeadLine-<version>-mac.zip`
+of the same app is attached too.)
 
 > **Gatekeeper note:** the app is ad-hoc signed (not notarized), so on first launch macOS
 > will warn you. Right-click the app → **Open** → **Open**, or clear the quarantine flag:
@@ -65,14 +66,15 @@ headlines, and BLUF summaries fill in as an AI backend becomes available.
 Releases are built by CI ([build-release.yml](.github/workflows/build-release.yml)): every
 `v*` tag builds `LeadLine.app` on a macOS runner and `LeadLine.exe` on a Windows runner
 (PyInstaller can't cross-compile), smoke-tests both binaries, and attaches
-`LeadLine-<version>-mac.zip` and `LeadLine-<version>-windows.zip` to the GitHub release. Run it
+`LeadLine-<version>-mac.dmg`, `LeadLine-<version>-mac.zip` and `LeadLine-<version>-windows.zip` to
+the GitHub release. Run it
 on demand from the Actions tab (**Run workflow**) to get artifacts without a release.
 
 Local builds — macOS:
 
 ```bash
 .venv/bin/pip install pyinstaller
-./build_app.sh          # produces dist/LeadLine.app (ad-hoc signed, versioned)
+./build_app.sh          # produces dist/LeadLine.app (ad-hoc signed) plus versioned .zip and .dmg
 cp -R dist/LeadLine.app /Applications/
 ```
 

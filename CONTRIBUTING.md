@@ -67,5 +67,5 @@ repo, chmod 600. CI/history is scanned before releases; keep it that way.
 - Match the existing style: small modules, docstrings that cite the spec section they
   implement, no comment noise.
 - Update `README.md` if you change settings, controls, or behavior.
-- Releases: bump `leadline/__init__.__version__`, run `./build_app.sh`, zip
-  `dist/LeadLine.app`, and attach it to a tagged GitHub release.
+- Releases: bump `leadline/__init__.__version__` and push a `v<version>` tag; CI builds the
+  mac `.dmg` and `.zip` and the Windows `.zip` and attaches them to the release.
