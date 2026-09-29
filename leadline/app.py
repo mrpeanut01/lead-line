@@ -31,8 +31,20 @@ def _selftest(window):
     time.sleep(10)
     try:
         cards = window.evaluate_js("document.querySelectorAll('.card').length")
+        # ticker round trip: the strip shows headlines or, with no Ollama, an error
+        window.evaluate_js("enterTicker()")
+        time.sleep(4)
+        strip = window.height
+        ticker = window.evaluate_js(
+            "document.body.classList.contains('ticker') && "
+            "(document.querySelectorAll('#ticker-track .tk').length > 0 || "
+            "!!document.getElementById('ticker-note').textContent)")
+        window.evaluate_js("exitTicker()")
+        time.sleep(2)
         errs = window.evaluate_js("window.__errs || []")
-        print(f"SELFTEST cards={cards} errors={errs}", flush=True)
+        ok = ticker and strip < 200 and window.height >= 640
+        print(f"SELFTEST cards={cards} ticker={'ok' if ok else 'FAIL'} "
+              f"errors={errs}", flush=True)
     except Exception as e:
         print(f"SELFTEST FAIL: {e}", flush=True)
     window.destroy()

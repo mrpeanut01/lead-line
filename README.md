@@ -127,6 +127,33 @@ settings):
 | red | server unreachable, or model not installed | no API key, or the last request failed |
 | grey | off | off |
 
+## Ticker view
+
+Press **▬** (or `t`) to minimize LeadLine into a news ticker: a thin strip that stays on
+top of other windows and scrolls the newest stories as wire-style lines of eight words or
+fewer. Drag the window edge to make it as wide as you like.
+
+- **Ollama only.** Ticker lines are written by your Ollama model and nothing else; Claude is
+  never used for them, whatever its role. Each line is condensed from the story's headline
+  and feed description, so the ticker never fetches or summarizes full articles. Stories
+  Ollama hasn't condensed yet stay off the tape rather than showing the original headline.
+- **Errors in the strip.** If Ollama is off, unreachable, or missing the model, the strip
+  says so in red (click it to open settings). While the model loads, an amber note shows how
+  many stories are waiting.
+- **Fresh to faded.** A new story is drawn in the scheme's highlight color and fades to
+  neutral over **Fade to neutral** (default 2 hours); it leaves the tape after **Remove
+  after** (default 6 hours). The tape holds the newest **Stories** (default 10).
+- **Time on screen follows the content.** The tape moves at a constant reading speed, so a
+  longer line stays in view longer. Hover to pause.
+- **Keeps itself current.** While the ticker is open it polls your feeds every **Check feeds
+  every** minutes (default 5, minimum 2) and picks up new lines as Ollama writes them.
+- **Click a story** to return to the full view with its AI summary card open. **⤢**, a
+  double-click, or `Esc` returns to the full view; **⚙** opens the ticker's settings.
+
+Customize it under **⚙ → Ticker**: number of stories, fade and removal times, poll cadence,
+scroll speed, text size, color scheme (Paper, Night, Amber terminal, Green terminal), and
+always-on-top.
+
 ## Configuration (environment variables)
 
 | Variable | Default |
@@ -154,6 +181,8 @@ settings):
 | Scroll / swipe up, `↓` `j` space | Next story (marks the passed story read) |
 | Scroll / swipe down, `↑` `k` | Previous story |
 | Read full article | Expand body inline |
+| ▬ or `t` | Minimize to the ticker view (see above) |
+| `Esc`, ⤢, or double-click the strip | Leave the ticker view |
 | ⟳ (or **Check for new stories** on the last card) | Poll feeds now and jump back to the top if anything is new; a toast says when nothing is |
 | ● Ollama ● Claude | AI server status (see above); click for settings |
 | ⚙ | Manage RSS sources, view provider stats |

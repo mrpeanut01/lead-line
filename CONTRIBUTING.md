@@ -35,7 +35,9 @@ leadline/
 Design rules worth knowing before you patch:
 
 - **Summarize on demand only.** Articles are summarized when they enter the reader's
-  read-ahead window (`request_summaries`), never in bulk from the pipeline.
+  read-ahead window (`request_summaries`), never in bulk from the pipeline. The ticker
+  view's one-line condensations (`get_ticker`) are limited to the stories on its tape and
+  go to Ollama only, never through the Claude fallback.
 - **Bodies are transient.** Extracted article text is TTL-purged (default 24 h); only
   summaries and headlines persist. Don't add long-term full-text storage.
 - **Respect publishers.** robots.txt stays on; attribution stays prominent.
