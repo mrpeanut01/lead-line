@@ -9,6 +9,8 @@ load plus a summary outlasts any sensible request timeout. monitor_ollama()
 loads the model at launch and while the reader is active, and tracks whether it
 is in memory: summaries wait for the load instead of timing out, or — with
 Claude's "primary_during_load" role — go to Claude until Ollama is ready.
+If another model is already in memory at launch, the reader is asked whether
+to use it for the session rather than wait for the configured one to load.
 """
 import json
 import re
@@ -86,7 +88,7 @@ def _parse_summary(text):
 
 # --- Ollama model readiness ---
 
-_WAITING = ("checking", "idle", "loading")   # states that can still become ready
+_WAITING = ("checking", "idle", "loading", "choice")   # states that can still become ready
 DEMAND_WINDOW_SECONDS = 600    # keep the model loaded this long after reading activity
 ERROR_SHOWN_SECONDS = 900      # how long a failed summary shows in the status pill
 
@@ -97,10 +99,19 @@ _last_demand = time.time()     # launching the app counts as reading activity
 _wake = threading.Event()
 _ollama_serial = threading.Lock()   # one generation at a time, so queued requests
                                     # don't spend their timeout waiting in line
+_offer = None          # {"configured", "loaded": [...]}: launch question awaiting an answer
+_offer_made = False    # asked (or found the configured model loaded) once this session
+_session_model = None  # (base_url, configured, chosen): loaded model picked at launch
 
 
 def _ollama_target():
-    return config.setting("ollama_base_url").rstrip("/"), config.setting("ollama_model")
+    """(server, model) to use: the configured model, unless the reader chose an
+    already-loaded one at launch and hasn't since changed server or model."""
+    base_url = config.setting("ollama_base_url").rstrip("/")
+    model = config.setting("ollama_model")
+    if _session_model and _session_model[:2] == (base_url, model):
+        return base_url, _session_model[2]
+    return base_url, model
 
 
 def _set_ollama(state, target, message=None):
@@ -120,18 +131,28 @@ def _same_model(a, b):
     return tagged(a) == tagged(b)
 
 
+def _is_embedding(m):
+    """Embedding models can be loaded but can't write a summary."""
+    family = ((m.get("details") or {}).get("family") or "").lower()
+    return "embed" in (m.get("name") or "").lower() or family.endswith("bert")
+
+
 def _probe_ollama(base_url, model):
-    """'ready' if the model is in memory, 'idle' if the server is up without it."""
+    """('ready' if the model is in memory, 'idle' if the server is up without
+    it, or 'unreachable'; the other chat models currently in memory)."""
     try:
         resp = requests.get(f"{base_url}/api/ps",
                             timeout=(config.OLLAMA_CONNECT_TIMEOUT_SECONDS, 10))
     except requests.RequestException:
-        return "unreachable"
+        return "unreachable", []
     try:
-        loaded = [m.get("name") or m.get("model") or "" for m in resp.json().get("models", [])]
+        models = [m for m in resp.json().get("models", []) if not _is_embedding(m)]
+        loaded = [m.get("name") or m.get("model") or "" for m in models]
     except (ValueError, AttributeError):
         loaded = []   # no /api/ps on older servers; loading a loaded model is instant
-    return "ready" if any(_same_model(n, model) for n in loaded) else "idle"
+    if any(_same_model(n, model) for n in loaded):
+        return "ready", []
+    return "idle", [n for n in loaded if n]
 
 
 def _load_ollama(base_url, model):
@@ -154,10 +175,19 @@ def _load_ollama(base_url, model):
 
 
 def _check_ollama():
+    global _offer, _offer_made
     target = _ollama_target()
     if config.setting("ollama_role") == "off":
         return _set_ollama("off", target)
-    state, message = _probe_ollama(*target), None
+    if _offer:
+        return _set_ollama("choice", target)   # don't load until the reader answers
+    state, others = _probe_ollama(*target)
+    message = None
+    if state != "unreachable" and not _offer_made:
+        _offer_made = True
+        if state == "idle" and others:
+            _offer = {"configured": target[1], "loaded": others}
+            return _set_ollama("choice", target)
     if state == "idle" and time.time() - _last_demand < DEMAND_WINDOW_SECONDS:
         _set_ollama("loading", target)
         state, message = _load_ollama(*target)
@@ -177,6 +207,26 @@ def monitor_ollama():
         _wake.wait(15 if _ollama["state"] in ("idle", "unreachable") else 60)
 
 
+def model_offer():
+    """The launch question for the UI, or None once answered."""
+    return dict(_offer) if _offer else None
+
+
+def choose_model(model):
+    """The reader's answer: an already-loaded model to use this session, or
+    the configured one (which then loads as usual)."""
+    global _offer, _session_model
+    if not _offer:
+        return
+    base_url = config.setting("ollama_base_url").rstrip("/")
+    configured = config.setting("ollama_model")
+    if model in _offer["loaded"] and not _same_model(model, configured):
+        _session_model = (base_url, configured, model)
+    _offer = None
+    _set_ollama("checking", _ollama_target())
+    _wake.set()
+
+
 def ollama_ready():
     target = _ollama_target()
     with _health:
@@ -192,7 +242,10 @@ def note_demand():
 
 
 def settings_changed():
-    """New server, model, role, or key: forget stale errors and re-check now."""
+    """New server, model, role, or key: forget stale errors and re-check now.
+    Saving settings also answers a pending launch question with the saved model."""
+    global _offer
+    _offer = None
     _last_error.clear()
     note_demand()
     _wake.set()
@@ -296,8 +349,8 @@ def call_anthropic(prompt):
 
 
 _BACKENDS = {
-    "ollama": (call_ollama, "ollama_model"),
-    "anthropic": (call_anthropic, "anthropic_model"),
+    "ollama": (call_ollama, lambda: _ollama_target()[1]),
+    "anthropic": (call_anthropic, lambda: config.setting("anthropic_model")),
 }
 
 
@@ -332,6 +385,7 @@ def backend_status():
         "unreachable": f"Server unreachable at {base_url}",
         "idle": f"{model} not in memory; loads when you start reading",
         "loading": f"Loading {model} into memory… {int(now - o['since'])}s",
+        "choice": "Another model is already loaded; waiting for you to pick one",
         "ready": f"{model} loaded and ready",
         "missing": f"{model} isn't installed on {base_url}",
         "error": f"Couldn't load {model}: {o['message']}",
@@ -360,7 +414,8 @@ def backend_status():
     if claude in ("active", "standby"):
         note = f"{config.setting('anthropic_model')} · {note}"
     return {"ollama": {"state": state, "detail": detail},
-            "anthropic": {"state": claude, "detail": note}}
+            "anthropic": {"state": claude, "detail": note},
+            "offer": model_offer()}
 
 
 # --- ticker (Ollama only, never routed through the fallback) ---
@@ -398,6 +453,8 @@ def ticker_error():
         return f"{model} isn't installed on {base_url} (ollama pull {model})"
     if state == "error":
         return f"Couldn't load {model}: {message}"
+    if state == "choice":
+        return "Another model is already loaded; open the reader to pick one"
     if state == "ready" and (err := _recent_error("ticker", time.time())):
         return f"Ticker line failed: {err}"
     return None
@@ -441,7 +498,7 @@ def summarize(article, source_name):
     prompt = build_prompt(article, source_name)
     errors = []
     for provider in backends:
-        fn, model_key = _BACKENDS[provider]
+        fn, model_name = _BACKENDS[provider]
         try:
             summary = fn(prompt)
         except Exception as e:  # timeout, connection, malformed output
@@ -449,7 +506,7 @@ def summarize(article, source_name):
             errors.append(f"[{provider}] {e}")
             continue
         _last_error.pop(provider, None)
-        return summary, provider, config.setting(model_key)
+        return summary, provider, model_name()
     raise RuntimeError("; ".join(errors))
 
 

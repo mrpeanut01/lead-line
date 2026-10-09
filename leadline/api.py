@@ -198,6 +198,12 @@ class Api:
         """Ollama / Claude state for the status pill; in-memory, no network."""
         return ai.backend_status()
 
+    def choose_ollama_model(self, model):
+        """Answer the launch question: use an already-loaded model this session,
+        or load the configured one."""
+        ai.choose_model(model)
+        return ai.backend_status()
+
     def discover_ollama_models(self, base_url=None):
         """List models available on the Ollama server (GET /api/tags)."""
         url = (base_url or config.setting("ollama_base_url")).rstrip("/")
