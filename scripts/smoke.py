@@ -83,6 +83,48 @@ try:
 except ValueError:
     pass
 
+# think ladder, against a stand-in Ollama server: a model that answers empty at
+# "think": false settles on "low" after two calls; one that rejects the field
+# (HTTP 400) settles on leaving it out once that is accepted
+import json  # noqa: E402
+import threading  # noqa: E402
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer  # noqa: E402
+
+asked = []
+
+
+class FakeOllama(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        think = body.get("think", "unset")
+        asked.append(think)
+        if body["model"] == "rejects-think" and think != "unset":
+            self.send_response(400)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        empty = body["model"] == "empty-at-false" and think is False
+        reply = json.dumps({"message": {"content": "" if empty else good}, "done": True}).encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(reply)))
+        self.end_headers()
+        self.wfile.write(reply)
+
+
+server = ThreadingHTTPServer(("127.0.0.1", 0), FakeOllama)
+threading.Thread(target=server.serve_forever, daemon=True).start()
+ollama = "http://127.0.0.1:%d" % server.server_port
+for model, calls in (("empty-at-false", [[False, "low"], [False, "low"], ["low"]]),
+                     ("rejects-think", [[False, "low", "unset"], ["unset"]])):
+    for expected in calls:
+        asked.clear()
+        assert ai._parse_summary(ai._ollama_generate(ollama, model, "prompt"))
+        assert asked == expected, (model, asked, expected)
+server.shutdown()
+
 # summary queue: a wanted story is summarized and comes back with its card; a
 # story that no longer exists is reported, not queued
 article = queue[0]
