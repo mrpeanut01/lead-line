@@ -210,6 +210,7 @@ def _html_text(resp):
 
 FETCH_ATTEMPTS = 3
 FETCH_RETRY_SECONDS = 20   # before asking a page that was just down or busy again
+FETCH_RETRY_MAX_SECONDS = 600   # ...at most, for a story with no description to fall back to
 _fetch_failures = {}   # article id -> (times its site was found down, when to ask again)
 _fetch_guard = threading.Lock()
 _fetch_locks = {}      # article id -> its fetch lock, kept for the session so every caller shares it
@@ -261,6 +262,13 @@ def _extract(article, for_reader):
         _fetch_failures[article["id"]] = (failures, down.retry_at)
         raise down
     if down and failures + 1 < FETCH_ATTEMPTS:
+        _fetch_failures[article["id"]] = (failures + 1, down.retry_at)
+        raise down
+    if down and not (article.get("rss_description") or "").strip():
+        # nothing to fall back to: keep asking, less and less often, rather
+        # than save an empty text for a summary to be made up from
+        down.retry_at = max(down.retry_at, time.time() + min(
+            FETCH_RETRY_SECONDS * 2 ** failures, FETCH_RETRY_MAX_SECONDS))
         _fetch_failures[article["id"]] = (failures + 1, down.retry_at)
         raise down
     try:

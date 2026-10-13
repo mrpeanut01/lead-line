@@ -697,6 +697,10 @@ def summarize_article(article_id, epoch=None):
         _check_cancelled()
         if not article or article["processed"]:
             return
+        if not (article["body_text"] or "").strip():
+            # neither the page nor the feed gave any text: a summary would be
+            # invented from the headline
+            raise RuntimeError("no article text to summarize")
         feeds = {f["id"]: f["name"] for f in store.get_feeds()}
         summary, provider, model = summarize(article, feeds.get(article["feed_source_id"]))
         store.save_summary(article_id, summary, provider, model)
