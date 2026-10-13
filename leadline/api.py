@@ -155,10 +155,16 @@ class Api:
                 due = [i for i, w in zip(self._wanted, waits) if w <= 0]
                 if due:
                     self._working = due[0]
+                    # its text is always fetched in the pool (again, if an
+                    # earlier try found the site down), never on this thread:
+                    # the worker can drop a wait, but not a download in progress
+                    body = self._bodies.get(due[0])
+                    if body is None or body.done():
+                        body = self._bodies[due[0]] = self._fetch_pool.submit(
+                            ingest.ensure_body, due[0])
                     # the epoch is read here, under the lock that decides a
                     # story is stale, so no abandon() of it can be missed
-                    return (due[0], self._retry_gen, self._bodies.get(due[0]),
-                            ai.abort_epoch())
+                    return due[0], self._retry_gen, body, ai.abort_epoch()
                 self._work.wait(min(waits) if waits else None)
 
     def _summary_worker(self):
@@ -169,8 +175,8 @@ class Api:
             error, site_retry_at = None, None
             try:
                 waited = time.time()
-                # if the fetch fails or outlasts this, summarize_article fetches it itself
-                while (body and not body.done() and ai.abort_epoch() == epoch
+                # if the fetch outlasts this, summarize_article waits for it itself
+                while (not body.done() and ai.abort_epoch() == epoch
                        and time.time() - waited < 60):
                     wait([body], timeout=1)
                 ai.summarize_article(article_id, epoch)
