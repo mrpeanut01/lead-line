@@ -238,7 +238,8 @@ def extract_article(article):
         # Summarize from the RSS description only (spec §5.2)
         body = article.get("rss_description") or ""
     _fetch_failures.pop(article["id"], None)
-    store.save_extraction(article["id"], body, paywalled, image)
+    # a site that stayed down gets the description too, but isn't a paywall
+    store.save_extraction(article["id"], body, paywalled and not down, image)
 
 
 def extract_pending():
