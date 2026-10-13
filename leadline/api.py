@@ -4,8 +4,7 @@ import sys
 import threading
 import time
 import webbrowser
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeout
+from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 
 import requests
@@ -70,7 +69,7 @@ class Api:
         store.mark_read(article_id)
         return True
 
-    def request_summaries(self, article_ids, seq=None):
+    def request_summaries(self, article_ids, seq):
         """The stories the reader is waiting on, most urgent first: the one on
         screen, then the read-ahead window. Each call replaces the last, so a
         story scrolled past stops costing model time and the one on screen is
@@ -80,11 +79,9 @@ class Api:
         and the reply carries the newest seq so a page that fell behind catches up."""
         asked = list(dict.fromkeys(article_ids))
         with self._work:
-            if seq is not None:
-                if seq <= self._wanted_seq:
-                    return {"queued": len(self._wanted), "seq": self._wanted_seq,
-                            "states": self._summary_states(asked)}
-                self._wanted_seq = seq
+            if seq <= self._wanted_seq:
+                return {"seq": self._wanted_seq, "states": self._summary_states(asked)}
+            self._wanted_seq = seq
             self._done.intersection_update(asked)
             ids = [i for i in asked if i not in self._done]
             new = [i for i in ids if i not in self._wanted]
@@ -106,30 +103,41 @@ class Api:
                 ai.abandon()
         if new:
             ai.note_demand()
-        return {"queued": len(ids), "seq": seq, "states": states}
+        return {"seq": seq, "states": states}
 
-    def retry_summaries(self, article_ids, seq=None):
+    def retry_summaries(self, article_ids, seq):
         """↻ on a waiting card: abandon whatever is in flight, forget recent
         failures, re-probe the AI servers, and resubmit these stories now."""
         with self._work:
             self._retry_gen += 1
-            self._failed.clear()
             self._bodies = {i: f for i, f in self._bodies.items() if not f.done()}
-        with self._ticker_lock:
-            self._ticker_failed.clear()
+        self._forget_failures()
         ai.retry_now()
         return self.request_summaries(article_ids, seq)
+
+    def _forget_failures(self):
+        """Stories and ticker lines that failed a moment ago may go again now."""
+        with self._work:
+            self._failed.clear()
+            self._work.notify_all()
+        with self._ticker_lock:
+            self._ticker_failed.clear()
+
+    def _retry_wait(self, i, now):
+        """(seconds until story i may be retried, <= 0 once due; why it failed)."""
+        failed_at, why, delay = self._failed.get(i, (0, None, 0))
+        return delay - (now - failed_at), why
 
     def _summary_states(self, ids):
         now = time.time()
         states = {}
         for i in ids:
-            failed_at, why, wait = self._failed.get(i, (0, None, 0))
+            left, why = self._retry_wait(i, now)
             if i in self._done:
                 states[i] = {"state": "done"}   # the UI has yet to pick it up
             elif i == self._working:
                 states[i] = {"state": "working"}
-            elif now - failed_at < wait:
+            elif left > 0:
                 states[i] = {"state": "failed", "error": why}
             else:
                 states[i] = {"state": "queued"}
@@ -140,8 +148,7 @@ class Api:
         with self._work:
             while True:
                 now = time.time()
-                waits = [wait - (now - failed_at) for failed_at, _, wait in
-                         (self._failed.get(i, (0, None, 0)) for i in self._wanted)]
+                waits = [self._retry_wait(i, now)[0] for i in self._wanted]
                 due = [i for i, w in zip(self._wanted, waits) if w <= 0]
                 if due:
                     self._working = due[0]
@@ -159,14 +166,10 @@ class Api:
             error = None
             try:
                 waited = time.time()
-                while body and ai.abort_epoch() == epoch and time.time() - waited < 60:
-                    try:
-                        body.result(timeout=1)
-                    except FutureTimeout:
-                        continue
-                    except Exception:
-                        pass   # summarize_article fetches it itself
-                    break
+                # if the fetch fails or outlasts this, summarize_article fetches it itself
+                while (body and not body.done() and ai.abort_epoch() == epoch
+                       and time.time() - waited < 60):
+                    wait([body], timeout=1)
                 ai.summarize_article(article_id, epoch)
             except ai.Cancelled:
                 error = ""     # resubmitted: goes again at once
@@ -181,9 +184,9 @@ class Api:
                         self._done.add(article_id)
                 elif error and gen == self._retry_gen:
                     again = self._failed.get(article_id)
-                    wait = (min(again[2] * 2, SUMMARY_RETRY_MAX_SECONDS) if again
-                            else SUMMARY_RETRY_SECONDS)
-                    self._failed[article_id] = (time.time(), error, wait)
+                    delay = (min(again[2] * 2, SUMMARY_RETRY_MAX_SECONDS) if again
+                             else SUMMARY_RETRY_SECONDS)
+                    self._failed[article_id] = (time.time(), error, delay)
 
     # --- ticker view (Ollama only) ---
 
@@ -290,11 +293,7 @@ class Api:
 
     def save_settings(self, updates):
         settings = config.save_settings(updates)
-        with self._work:
-            self._failed.clear()   # a fixed key or server should retry right away
-            self._work.notify_all()
-        with self._ticker_lock:
-            self._ticker_failed.clear()
+        self._forget_failures()   # a fixed key or server should retry right away
         ai.settings_changed()
         return settings
 

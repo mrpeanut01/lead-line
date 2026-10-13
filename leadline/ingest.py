@@ -159,7 +159,6 @@ def _robots_allowed(url):
             resp = requests.get(host + "/robots.txt", headers={"User-Agent": USER_AGENT},
                                 timeout=10)
             if resp.status_code >= 500:   # an outage, not an answer: ask again later
-                rp.disallow_all = True
                 retry_at = time.time() + ROBOTS_RETRY_SECONDS
             elif resp.status_code in (401, 403):
                 rp.disallow_all = True
@@ -168,7 +167,6 @@ def _robots_allowed(url):
             else:
                 rp.parse(resp.text.splitlines())
         except Exception:
-            rp.disallow_all = True
             retry_at = time.time() + ROBOTS_RETRY_SECONDS
         _robots_cache[host] = (rp, retry_at)
     if retry_at:

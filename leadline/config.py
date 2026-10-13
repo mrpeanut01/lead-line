@@ -87,26 +87,23 @@ def load_settings():
         stamp = None
     if _loaded and _loaded[0] == stamp:
         return dict(_loaded[1])
-    settings = dict(_DEFAULTS)
-    try:
-        saved = json.loads(SETTINGS_PATH.read_text())
-        if isinstance(saved, dict):
-            settings.update(saved)
-    except (OSError, ValueError):
-        pass
+    settings = {**_DEFAULTS, **_read_saved()}
     _loaded = (stamp, settings)
     return dict(settings)
 
 
+def _read_saved():
+    """What settings.json holds; nothing if it is missing or not a JSON object."""
+    try:
+        saved = json.loads(SETTINGS_PATH.read_text())
+    except (OSError, ValueError):
+        return {}
+    return saved if isinstance(saved, dict) else {}
+
+
 def save_settings(updates):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    current = {}
-    try:
-        current = json.loads(SETTINGS_PATH.read_text())
-    except (OSError, ValueError):
-        pass
-    if not isinstance(current, dict):
-        current = {}
+    current = _read_saved()
     current.update({k: v for k, v in updates.items() if k in _DEFAULTS})
     for k, (lo, hi) in _INT_RANGES.items():
         if k not in current:

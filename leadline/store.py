@@ -103,6 +103,10 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def utc_day():
+    return datetime.now(timezone.utc).date().isoformat()
+
+
 def _story_age_cutoff():
     """ISO timestamp before which stories are considered dated and not offered."""
     try:
@@ -199,10 +203,9 @@ def save_summary(article_id, summary, provider, model):
 
 
 def anthropic_calls_today():
-    day = datetime.now(timezone.utc).date().isoformat()
     rows = query(
         "SELECT COUNT(*) AS n FROM articles WHERE ai_provider = 'anthropic' "
-        "AND ai_processed_at >= ?", (day,))
+        "AND ai_processed_at >= ?", (utc_day(),))
     return rows[0]["n"]
 
 

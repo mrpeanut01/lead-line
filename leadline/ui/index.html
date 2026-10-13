@@ -702,11 +702,14 @@ function paintPending(card) {
     : s.state === "working" ? ["loading", "Summarizing now…"]
     : s.state === "failed" ? ["error", `Summary failed (${s.error || "unknown error"}). Trying again shortly.`]
     : ["checking", "Waiting for its turn with the AI…"];
-  card.querySelector(".pending-status .dot").className = "dot " + dot;
-  text.textContent = msg;
+  // most cards are repainted with what they already show: leave those alone
+  const dotEl = card.querySelector(".pending-status .dot");
+  if (dotEl.className !== "dot " + dot) dotEl.className = "dot " + dot;
+  if (text.textContent !== msg) text.textContent = msg;
 }
 
 /* track the active card; advancing past a card marks it read (spec §4.3) */
+let scrollSettle = 0;
 const observer = new IntersectionObserver(entries => {
   for (const e of entries) {
     if (!e.isIntersecting) continue;
@@ -714,7 +717,10 @@ const observer = new IntersectionObserver(entries => {
     const idx = atEnd ? cards.length : parseInt(e.target.dataset.index, 10);
     currentIndex = idx;
     updateProgress(idx);
-    ensureSummaries();
+    // once the scroll settles: flicking through cards shouldn't start a fetch
+    // and a summary for each one passed
+    clearTimeout(scrollSettle);
+    scrollSettle = setTimeout(ensureSummaries, 200);
     if (idx > 0 && !hintFaded) {
       hintFaded = true;
       document.querySelectorAll(".swipe-hint").forEach(h => h.classList.add("faded"));
@@ -1074,8 +1080,7 @@ $("btn-save-settings").onclick = async () => {
     maxAgeDays = updates.max_story_age_days;
     renderStack(await api().get_queue(100));   // age window changed — rebuild
   }
-  // settings may have enabled a backend or widened the window — re-request
-  cards.forEach(c => delete c._requested);
+  // settings may have enabled a backend or widened the window
   ensureSummaries();
   pollAiStatus();
   $("settings-saved").textContent = "Saved ✓";

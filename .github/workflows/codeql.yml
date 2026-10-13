@@ -12,6 +12,11 @@ on:
 permissions:
   contents: read
 
+# a newer push to a pull request replaces the analysis of the older one
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   analyze:
     runs-on: ubuntu-latest

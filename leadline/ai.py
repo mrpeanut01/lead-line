@@ -19,7 +19,7 @@ import time
 
 import requests
 
-from . import config, store
+from . import config, ingest, store
 
 SUMMARY_SCHEMA = {
     "type": "object",
@@ -273,8 +273,10 @@ def _begun():
     return _abort_epoch if epoch is None else epoch
 
 
-def _check_cancelled():
-    if _begun() != _abort_epoch:
+def _check_cancelled(epoch=None):
+    """Raise if the reader has moved on since `epoch` (default: since this
+    thread's call began)."""
+    if (_begun() if epoch is None else epoch) != _abort_epoch:
         raise Cancelled("cancelled")
 
 
@@ -307,8 +309,7 @@ def _await_ollama(target):
             lambda: epoch != _abort_epoch
             or (_ollama["target"] == target and _ollama["state"] not in _WAITING),
             timeout=config.OLLAMA_LOAD_TIMEOUT_SECONDS + 30)
-        if epoch != _abort_epoch:
-            raise Cancelled("cancelled")
+        _check_cancelled(epoch)
         state = _ollama["state"] if _ollama["target"] == target else "checking"
         message = _ollama["message"]
     if state != "ready":
@@ -357,18 +358,16 @@ def _ollama_chat(base_url, model, prompt, think, schema):
     if think is not None:
         body["think"] = think
     epoch = _begun()
-    if epoch != _abort_epoch:
-        raise Cancelled("cancelled")
+    _check_cancelled(epoch)
     deadline = time.time() + config.OLLAMA_TIMEOUT_SECONDS
-    content, reasoned, done = [], False, False
+    content, reasoned = [], False
     with requests.post(f"{base_url}/api/chat", json=body, stream=True,
                        timeout=(config.OLLAMA_CONNECT_TIMEOUT_SECONDS,
                                 config.OLLAMA_TIMEOUT_SECONDS)) as resp:
         resp.raise_for_status()
         try:
             for line in resp.iter_lines():
-                if epoch != _abort_epoch:
-                    raise Cancelled("cancelled")
+                _check_cancelled(epoch)
                 if time.time() > deadline:
                     raise requests.Timeout("timed out")
                 # a stalled stream gets what is left of the deadline, not a
@@ -387,15 +386,13 @@ def _ollama_chat(base_url, model, prompt, think, schema):
                     # (the next rung) would only hit the cap again
                     if chunk.get("done_reason") == "length":
                         raise RuntimeError("reply hit the token limit")
-                    done = True
-                    break
+                    return "".join(content), reasoned
         except requests.ConnectionError:
             if time.time() > deadline:
                 raise requests.Timeout("timed out") from None
             raise
-    if not done:   # the server went away mid-reply: not a short or empty answer
-        raise requests.ConnectionError("reply cut off")
-    return "".join(content), reasoned
+    # the server went away mid-reply: not a short or empty answer
+    raise requests.ConnectionError("reply cut off")
 
 
 def _set_read_timeout(resp, seconds):
@@ -458,7 +455,7 @@ _anthropic_unsaved = [None, 0]   # [UTC day, answered calls that day with no usa
 def _anthropic_calls_today():
     """Calls that count against the daily cap: saved summaries, plus replies
     that were paid for but couldn't be used."""
-    day = time.strftime("%Y-%m-%d", time.gmtime())
+    day = store.utc_day()
     if _anthropic_unsaved[0] != day:
         _anthropic_unsaved[:] = [day, 0]
     return store.anthropic_calls_today() + _anthropic_unsaved[1]
@@ -664,8 +661,6 @@ def summarize(article, source_name):
 def ensure_body(article_id):
     """Fetch a story's text ahead of its turn with the model. None means never
     extracted or TTL-purged; '' means extraction found nothing, so don't refetch."""
-    from . import ingest
-
     with _body_guard:
         lock = _body_locks.setdefault(article_id, threading.Lock())
     # a second caller waits for the fetch instead of repeating it; if the site
@@ -685,8 +680,6 @@ def summarize_article(article_id, epoch=None):
     enabled server failed; the card keeps its original headline meanwhile.
     `epoch` is abort_epoch() from when the story was picked: an abandon()
     since then cancels it wherever it has got to."""
-    from . import ingest
-
     _call.epoch = epoch
     try:
         _check_cancelled()   # before waiting on a fetch already under way
