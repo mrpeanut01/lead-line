@@ -668,18 +668,16 @@ def ensure_body(article_id):
 
     with _body_guard:
         lock = _body_locks.setdefault(article_id, threading.Lock())
-    try:
-        with lock:   # a second caller waits for the fetch instead of repeating it
-            article = store.get_article(article_id)
-            if article and not article["processed"] and article["body_text"] is None:
-                ingest.extract_article(article)
-    finally:
-        with _body_guard:
-            _body_locks.pop(article_id, None)
+    # a second caller waits for the fetch instead of repeating it; if the site
+    # was down, extract_article itself declines to ask again so soon
+    with lock:
+        article = store.get_article(article_id)
+        if article and not article["processed"] and article["body_text"] is None:
+            ingest.extract_article(article)
 
 
 _body_guard = threading.Lock()
-_body_locks = {}   # article id -> lock held while its text is being fetched
+_body_locks = {}   # article id -> its fetch lock, kept for the session so every caller shares it
 
 
 def summarize_article(article_id, epoch=None):

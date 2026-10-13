@@ -180,7 +180,8 @@ def _robots_allowed(url):
 
 
 FETCH_ATTEMPTS = 3     # then a site that stays down is treated like a paywall
-_fetch_failures = {}   # article id -> fetches that found the site down or busy
+FETCH_RETRY_SECONDS = 20   # a site that was just down is not asked again sooner
+_fetch_failures = {}   # article id -> (fetches that found the site down or busy, time of the last)
 
 
 def fetch_pending(article_id):
@@ -206,6 +207,9 @@ def extract_article(article):
     that is down or busy is not a paywall: nothing is saved, so the story is
     fetched again later (a few times, so a dead site can't hold up the rest)."""
     body, image = "", None
+    failures, failed_at = _fetch_failures.get(article["id"], (0, 0))
+    if time.time() - failed_at < FETCH_RETRY_SECONDS:
+        return   # another caller just found it down: neither refetch nor count again
     allowed = _robots_allowed(article["canonical_url"])
     resp, down = None, allowed is None
     if allowed:
@@ -216,8 +220,9 @@ def extract_article(article):
         except requests.RequestException:
             down = True
     if down:
-        _fetch_failures[article["id"]] = _fetch_failures.get(article["id"], 0) + 1
-        if _fetch_failures[article["id"]] < FETCH_ATTEMPTS:
+        # counted from the read above, so callers that overlapped count once
+        _fetch_failures[article["id"]] = (failures + 1, time.time())
+        if failures + 1 < FETCH_ATTEMPTS:
             return
     try:
         if resp is not None and resp.ok:
