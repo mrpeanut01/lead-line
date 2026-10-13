@@ -116,6 +116,7 @@ class Api:
             self._retry_gen += 1
             self._bodies = {i: f for i, f in self._bodies.items() if not f.done()}
         self._forget_failures()
+        ingest.forget_failures()
         ai.retry_now()
         return self.request_summaries(article_ids)
 

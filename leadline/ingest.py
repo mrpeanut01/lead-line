@@ -215,6 +215,14 @@ _fetch_guard = threading.Lock()
 _fetch_locks = {}      # article id -> its fetch lock, kept for the session so every caller shares it
 
 
+def forget_failures():
+    """The reader asked to try again now: sites found down (and robots.txt
+    files that couldn't be read) are asked again at once, with fresh tries."""
+    _fetch_failures.clear()
+    for host in [h for h, (_, retry_at) in _robots_cache.items() if retry_at]:
+        del _robots_cache[host]
+
+
 def ensure_body(article_id, for_reader=True):
     """The story's row with its text fetched if it wasn't there (body_text is
     None: never extracted, or TTL-purged; '' means extraction found nothing, so
