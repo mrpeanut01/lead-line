@@ -43,7 +43,7 @@ Single-process Python desktop app in a native macOS window (pywebview / WKWebVie
 | Spec layer | Implementation |
 |---|---|
 | Ingestion | RSS polling with conditional GET (ETag / Last-Modified), URL normalization, SHA-256 dedup, `INSERT OR IGNORE` |
-| Extraction | Dependency-free paragraph harvester + `og:image`; robots.txt respected; paywall detection by word count |
+| Extraction | Dependency-free paragraph harvester + `og:image`; robots.txt respected (a robots.txt that can't be read means the page isn't fetched); paywall detection by word count; a site that is down is retried before falling back to the feed's description |
 | AI processing | Ollama first (structured JSON output, model warmed into memory at launch), Anthropic Claude Haiku fallback — or cover while the model loads — with a hard daily cap; provider logged per article |
 | Storage | SQLite in `~/Library/Application Support/LeadLine/` (Postgres stand-in); body text TTL-purged after 24 h (Redis stand-in) |
 | UI | `scroll-snap-type: y mandatory` card stack, 100vh cards, edge progress bar, topic accent, inline reading mode |
@@ -97,12 +97,19 @@ immediately; environment variables below act as defaults only.
 
 - **Ollama:** install from <https://ollama.com>, then e.g. `ollama pull gemma4:12b`
   and pick it in settings. Thinking models are asked to skip their reasoning pass (a summary
-  doesn't need it, and it multiplies latency); models that can't skip it, like gpt-oss, are
-  called normally.
+  doesn't need it, and it multiplies latency); models that reason anyway, like gpt-oss, are
+  asked for the least reasoning instead, and models that reject the setting are called
+  normally. What works is remembered per model for the session.
 - **Anthropic:** paste an API key from <https://console.anthropic.com>.
 
 Stories are summarized **on demand only** — the story on screen plus the **Read ahead**
-window (0–10, default 1). Nothing is sent to a model before you're about to read it.
+window (0–10, default 1). Nothing is sent to a model before you're about to read it, and a
+story you scroll past stops being summarized so the one on screen goes next.
+
+A card that is still waiting shows where its summary stands — waiting its turn, summarizing
+now, or failed (with the reason) — under the original headline. A failed story is retried
+on its own, at longer intervals each time; **↻ Retry summary** on the card resubmits it at
+once and re-checks the AI servers.
 
 ### Ollama model loading
 
