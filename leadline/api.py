@@ -98,7 +98,7 @@ class Api:
                 del self._bodies[i]
             for i in ids:   # article text downloads while earlier stories summarize
                 if i not in self._bodies:
-                    self._bodies[i] = self._fetch_pool.submit(ingest.ensure_body, i)
+                    self._bodies[i] = self._fetch_pool.submit(ai.body_to_summarize, i)
             self._work.notify_all()
             states.update(self._summary_states(ids))
             if self._working is not None and self._working not in ids:
@@ -161,7 +161,7 @@ class Api:
                     body = self._bodies.get(due[0])
                     if body is None or body.done():
                         body = self._bodies[due[0]] = self._fetch_pool.submit(
-                            ingest.ensure_body, due[0])
+                            ai.body_to_summarize, due[0])
                     # the epoch is read here, under the lock that decides a
                     # story is stale, so no abandon() of it can be missed
                     return due[0], self._retry_gen, body, ai.abort_epoch()

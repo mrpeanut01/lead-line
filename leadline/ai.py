@@ -673,6 +673,16 @@ def summarize(article, source_name):
     raise RuntimeError("; ".join(errors))
 
 
+def body_to_summarize(article_id):
+    """The story's row with its text in place, or None if there is nothing to
+    summarize (gone, or summarized meanwhile: its purged text isn't fetched
+    again just to be thrown away). Raises ingest.SiteDown like ensure_body."""
+    article = store.get_article(article_id)
+    if not article or article["processed"]:
+        return None
+    return ingest.ensure_body(article_id)
+
+
 def summarize_article(article_id, epoch=None):
     """Summarize one story, on demand only. Raises RuntimeError if every
     enabled server failed, or ingest.SiteDown while the story's site is down
@@ -683,7 +693,7 @@ def summarize_article(article_id, epoch=None):
     _call.epoch = epoch
     try:
         _check_cancelled()   # before waiting on a fetch already under way
-        article = ingest.ensure_body(article_id)
+        article = body_to_summarize(article_id)
         _check_cancelled()
         if not article or article["processed"]:
             return
