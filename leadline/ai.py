@@ -381,10 +381,10 @@ def _ollama_chat(base_url, model, prompt, think, schema):
                 content.append(message.get("content") or "")
                 reasoned = reasoned or bool(message.get("thinking"))
                 if chunk.get("done"):
-                    # cut off at the cap is not an empty reply: more reasoning
-                    # (the next rung) would only hit the cap again
+                    # cut off at the cap is not an empty reply: stepping up to
+                    # more reasoning would only hit the cap again
                     if chunk.get("done_reason") == "length":
-                        raise RuntimeError("reply hit the token limit")
+                        raise ReplyCutOff(reasoned)
                     return "".join(content), reasoned
         except requests.ConnectionError:
             if time.time() > deadline:
@@ -392,6 +392,15 @@ def _ollama_chat(base_url, model, prompt, think, schema):
             raise
     # the server went away mid-reply: not a short or empty answer
     raise requests.ConnectionError("reply cut off")
+
+
+class ReplyCutOff(RuntimeError):
+    """The reply ran into MAX_REPLY_TOKENS; `reasoned` says whether the model
+    spent tokens on reasoning."""
+
+    def __init__(self, reasoned):
+        super().__init__("reply hit the token limit")
+        self.reasoned = reasoned
 
 
 def _set_read_timeout(resp, seconds):
@@ -421,6 +430,13 @@ def _ollama_generate(base_url, model, prompt, schema=SUMMARY_SCHEMA):
                         raise
                     rung += 1
                     rejected = True
+                    continue
+                except ReplyCutOff as e:
+                    if rung != 0 or not e.reasoned:
+                        raise
+                    # it reasoned through the cap despite "think": false: the
+                    # next rung asks it for less, the same as when it answers
+                    _think_rung[model] = rung = 1
                     continue
                 if content.strip():
                     if rejected:   # the 400 was about "think": this rung was accepted
