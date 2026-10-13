@@ -1,0 +1,85 @@
+name: Claude review
+
+# A code review and a security review of every pull request, posted as PR
+# comments. Runs on a Claude subscription: needs the CLAUDE_CODE_OAUTH_TOKEN
+# repository secret (from `claude setup-token`); without it the jobs pass
+# without doing anything. Pull requests from forks and from Dependabot
+# are skipped: they don't receive secrets, and their content is untrusted.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: ${{ matrix.kind }}-review
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository
+      && !github.event.pull_request.draft
+      && github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      HAS_KEY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - kind: code
+            prompt: |
+              Review this pull request for correctness bugs first, then for needless
+              complexity. Read CONTRIBUTING.md before you start: its design rules
+              (summarize on demand only, bodies are transient, respect publishers, no
+              frameworks or new dependencies) are requirements, so flag any change that
+              breaks one.
+
+              Report only problems you can tie to a specific line, each with the input
+              or situation that triggers it. Do not comment on style. Post each finding
+              as an inline comment on the line, then one short summary comment with
+              `gh pr comment`. If you find nothing, say so in one sentence.
+          - kind: security
+            prompt: |
+              Do a security review of the changes in this pull request only. LeadLine
+              is a single-user desktop app: a pywebview window whose page can call
+              every public method of `leadline/api.py`, fed by RSS feeds and article
+              pages that are untrusted. Look for:
+              - feed, article or model output reaching the page unescaped (script
+                there can call the Python bridge and read the saved API key)
+              - requests to URLs taken from untrusted content, and unsafe handling of
+                what comes back
+              - the API key or settings file leaking into logs, errors or the page
+              - SQL built from strings, unsafe file paths, unsafe deserialization
+              - workflow changes that widen token permissions or run untrusted code
+
+              Report only issues with a concrete way to exploit them, each as an
+              inline comment on the line with its severity and a fix. Leave out
+              hardening suggestions and anything theoretical. Finish with one short
+              summary comment using `gh pr comment`; if there is nothing, say so in
+              one sentence.
+    steps:
+      - name: No token
+        if: env.HAS_KEY != 'true'
+        run: echo "::notice::CLAUDE_CODE_OAUTH_TOKEN secret is not set; skipping the Claude ${{ matrix.kind }} review"
+      - uses: actions/checkout@v7
+        if: env.HAS_KEY == 'true'
+      - uses: anthropics/claude-code-action@1d6de8cb0c237e7c15e9e1bdf973826ebae490cc  # v1.0.248
+        if: env.HAS_KEY == 'true'
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            ${{ matrix.prompt }}
+          claude_args: >-
+            --allowed-tools
+            "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"

@@ -75,22 +75,35 @@ ROLES = {
 }
 
 
+_loaded = None   # (file stamp, settings): setting() is called many times a second
+
+
 def load_settings():
-    settings = dict(_DEFAULTS)
+    global _loaded
     try:
-        settings.update(json.loads(SETTINGS_PATH.read_text()))
+        st = SETTINGS_PATH.stat()
+        stamp = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        stamp = None
+    if _loaded and _loaded[0] == stamp:
+        return dict(_loaded[1])
+    settings = {**_DEFAULTS, **_read_saved()}
+    _loaded = (stamp, settings)
+    return dict(settings)
+
+
+def _read_saved():
+    """What settings.json holds; nothing if it is missing or not a JSON object."""
+    try:
+        saved = json.loads(SETTINGS_PATH.read_text())
     except (OSError, ValueError):
-        pass
-    return settings
+        return {}
+    return saved if isinstance(saved, dict) else {}
 
 
 def save_settings(updates):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    current = {}
-    try:
-        current = json.loads(SETTINGS_PATH.read_text())
-    except (OSError, ValueError):
-        pass
+    current = _read_saved()
     current.update({k: v for k, v in updates.items() if k in _DEFAULTS})
     for k, (lo, hi) in _INT_RANGES.items():
         if k not in current:
@@ -118,6 +131,8 @@ def save_settings(updates):
         f.write(json.dumps(current, indent=2))
     os.replace(tmp, SETTINGS_PATH)
     SETTINGS_PATH.chmod(0o600)
+    global _loaded
+    _loaded = None
     return load_settings()
 
 

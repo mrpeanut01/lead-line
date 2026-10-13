@@ -1,0 +1,66 @@
+name: CI
+
+# Every pull request and every push to main: lint, a dependency audit, and a
+# headless smoke test of the backend (scripts/smoke.py).
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Ruff (rules in ruff.toml)
+        run: |
+          pip install ruff
+          ruff check .
+      - name: Python compiles
+        run: python -m compileall -q leadline scripts run_leadline.py
+      - name: UI script parses
+        run: |
+          python - <<'EOF'
+          import re
+          html = open("leadline/ui/index.html", encoding="utf-8").read()
+          open("ui.js", "w", encoding="utf-8").write(
+              "\n".join(re.findall(r"<script>(.*?)</script>", html, re.S)))
+          EOF
+          node --check ui.js
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Known vulnerabilities in dependencies
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt
+
+  # Headless: GitHub's macOS runners don't bring up the app's window for a
+  # plain `python -m leadline` (pywebview: "Main window failed to start"), so
+  # the windowed LEADLINE_SELFTEST=1 check stays a local step.
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Smoke test (store, settings, extraction, summary queue)
+        run: python scripts/smoke.py

@@ -103,6 +103,10 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def utc_day():
+    return datetime.now(timezone.utc).date().isoformat()
+
+
 def _story_age_cutoff():
     """ISO timestamp before which stories are considered dated and not offered."""
     try:
@@ -199,10 +203,9 @@ def save_summary(article_id, summary, provider, model):
 
 
 def anthropic_calls_today():
-    day = datetime.now(timezone.utc).date().isoformat()
     rows = query(
         "SELECT COUNT(*) AS n FROM articles WHERE ai_provider = 'anthropic' "
-        "AND ai_processed_at >= ?", (day,))
+        "AND ai_processed_at >= ?", (utc_day(),))
     return rows[0]["n"]
 
 
@@ -226,15 +229,18 @@ def get_backlog(limit=100):
     """Unread stories older than the max-age window. Never offered in the main
     queue — the end-of-stack card reports the count and reveals them on demand."""
     cutoff = _story_age_cutoff()
+    # enabled feeds only, like the queue: a removed feed's stories stay gone
     count = query(
-        "SELECT COUNT(*) AS n FROM articles WHERE is_read = 0 AND pub_date < ?",
+        "SELECT COUNT(*) AS n FROM articles a "
+        "JOIN feed_sources f ON f.id = a.feed_source_id "
+        "WHERE a.is_read = 0 AND f.enabled = 1 AND a.pub_date < ?",
         (cutoff,))[0]["n"]
     items = []
     if limit:
         items = [_decode_card(r) for r in query(
             "SELECT a.*, f.name AS source_name FROM articles a "
-            "LEFT JOIN feed_sources f ON f.id = a.feed_source_id "
-            "WHERE a.is_read = 0 AND a.pub_date < ? "
+            "JOIN feed_sources f ON f.id = a.feed_source_id "
+            "WHERE a.is_read = 0 AND f.enabled = 1 AND a.pub_date < ? "
             "ORDER BY a.pub_date DESC LIMIT ?", (cutoff, limit))]
     return {"count": count, "items": items}
 

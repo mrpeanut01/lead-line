@@ -1,0 +1,6 @@
+# Bug-finding rules only (syntax errors, undefined names, unused code); the
+# project has no style rules to enforce.
+target-version = "py312"
+
+[lint]
+select = ["E9", "F"]

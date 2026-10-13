@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 # PyInstaller spec for LeadLine.exe — single-file windowed Windows build.
 # Must be built on Windows (PyInstaller does not cross-compile); CI does this
-# in .github/workflows/build-windows.yml. Requires the Edge WebView2 runtime
+# in .github/workflows/build-release.yml. Requires the Edge WebView2 runtime
 # at run time (preinstalled on Windows 11 and kept current on Windows 10).
 
 a = Analysis(

@@ -46,7 +46,10 @@ Design rules worth knowing before you patch:
 
 ## Testing
 
-There is no formal test suite yet (contributions welcome). Verify changes by:
+There is no formal test suite yet (contributions welcome). CI runs on every pull request:
+lint (`ruff check .`, rules in `ruff.toml`), a dependency audit, a headless smoke test
+(`scripts/smoke.py`), CodeQL, and a Claude code and security review. The window itself is
+not exercised in CI, so verify changes locally by:
 
 1. Running the pipeline headless — poll/extract/summarize functions are all importable
    and take plain dicts; point `LEADLINE_DATA_DIR` at a scratch directory.
