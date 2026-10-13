@@ -146,6 +146,8 @@ class _ArticleHTMLParser(HTMLParser):
 
 
 def _robots_allowed(url):
+    """True or False from the site's robots.txt; None while it can't be read
+    (5xx, timeout, connection error): not fetched, and asked again later."""
     host = urlparse(url).scheme + "://" + urlparse(url).netloc
     rp, retry_at = _robots_cache.get(host, (None, None))
     if rp is None or (retry_at and time.time() > retry_at):
@@ -166,9 +168,11 @@ def _robots_allowed(url):
             else:
                 rp.parse(resp.text.splitlines())
         except Exception:
-            rp.allow_all = True
+            rp.disallow_all = True
             retry_at = time.time() + ROBOTS_RETRY_SECONDS
         _robots_cache[host] = (rp, retry_at)
+    if retry_at:
+        return None
     try:
         return rp.can_fetch(USER_AGENT, url)
     except Exception:
@@ -202,24 +206,27 @@ def extract_article(article):
     that is down or busy is not a paywall: nothing is saved, so the story is
     fetched again later (a few times, so a dead site can't hold up the rest)."""
     body, image = "", None
-    if _robots_allowed(article["canonical_url"]):
+    allowed = _robots_allowed(article["canonical_url"])
+    resp, down = None, allowed is None
+    if allowed:
         try:
             resp = requests.get(article["canonical_url"],
                                 headers={"User-Agent": USER_AGENT}, timeout=20)
+            down = resp.status_code == 429 or resp.status_code >= 500
         except requests.RequestException:
-            resp = None
-        if resp is None or resp.status_code == 429 or resp.status_code >= 500:
-            _fetch_failures[article["id"]] = _fetch_failures.get(article["id"], 0) + 1
-            if _fetch_failures[article["id"]] < FETCH_ATTEMPTS:
-                return
-        try:
-            if resp is not None and resp.ok:
-                parser = _ArticleHTMLParser()
-                parser.feed(_html_text(resp))
-                body = "\n\n".join(parser.paragraphs)
-                image = parser.og_image
-        except Exception:
-            pass
+            down = True
+    if down:
+        _fetch_failures[article["id"]] = _fetch_failures.get(article["id"], 0) + 1
+        if _fetch_failures[article["id"]] < FETCH_ATTEMPTS:
+            return
+    try:
+        if resp is not None and resp.ok:
+            parser = _ArticleHTMLParser()
+            parser.feed(_html_text(resp))
+            body = "\n\n".join(parser.paragraphs)
+            image = parser.og_image
+    except Exception:
+        pass
 
     paywalled = len(body.split()) < config.PAYWALL_WORD_THRESHOLD
     if paywalled:

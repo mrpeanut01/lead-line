@@ -58,7 +58,8 @@ class Api:
         if not article["body_text"]:
             ingest.extract_article(article)
             article = store.get_article(article_id)
-        return {"body": article["body_text"] or "",
+        # still None while its site is down: the feed's description meanwhile
+        return {"body": article["body_text"] or article["rss_description"] or "",
                 "is_paywalled": bool(article["is_paywalled"])}
 
     def get_card(self, article_id):
@@ -98,10 +99,11 @@ class Api:
                 if i not in self._bodies:
                     self._bodies[i] = self._fetch_pool.submit(ai.ensure_body, i)
             self._work.notify_all()
-            stale = self._working is not None and self._working not in ids
             states = self._summary_states(asked)
-        if stale:
-            ai.abandon()   # the story being summarized was scrolled past
+            if self._working is not None and self._working not in ids:
+                # the story being summarized was scrolled past. Under the lock,
+                # so the worker can't have moved on to one that is still wanted
+                ai.abandon()
         if new:
             ai.note_demand()
         return {"queued": len(ids), "seq": seq, "states": states}
