@@ -75,13 +75,27 @@ ROLES = {
 }
 
 
+_loaded = None   # (file stamp, settings): setting() is called many times a second
+
+
 def load_settings():
+    global _loaded
+    try:
+        st = SETTINGS_PATH.stat()
+        stamp = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        stamp = None
+    if _loaded and _loaded[0] == stamp:
+        return dict(_loaded[1])
     settings = dict(_DEFAULTS)
     try:
-        settings.update(json.loads(SETTINGS_PATH.read_text()))
+        saved = json.loads(SETTINGS_PATH.read_text())
+        if isinstance(saved, dict):
+            settings.update(saved)
     except (OSError, ValueError):
         pass
-    return settings
+    _loaded = (stamp, settings)
+    return dict(settings)
 
 
 def save_settings(updates):
@@ -91,6 +105,8 @@ def save_settings(updates):
         current = json.loads(SETTINGS_PATH.read_text())
     except (OSError, ValueError):
         pass
+    if not isinstance(current, dict):
+        current = {}
     current.update({k: v for k, v in updates.items() if k in _DEFAULTS})
     for k, (lo, hi) in _INT_RANGES.items():
         if k not in current:
@@ -118,6 +134,8 @@ def save_settings(updates):
         f.write(json.dumps(current, indent=2))
     os.replace(tmp, SETTINGS_PATH)
     SETTINGS_PATH.chmod(0o600)
+    global _loaded
+    _loaded = None
     return load_settings()
 
 

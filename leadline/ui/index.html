@@ -88,6 +88,18 @@
   .bluf li::before { content: "•"; position: absolute; left: 2px; color: var(--color-text-faint); }
 
   .pending-note { font-size: 14px; color: var(--color-text-faint); font-style: italic; }
+  /* where this story's AI summary stands, and a way to resubmit it */
+  .pending-status {
+    display: flex; align-items: center; gap: 8px; margin-top: 20px;
+    font-size: 13px; color: var(--color-text-muted);
+  }
+  .pending-status .pending-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .retry-summary {
+    font-family: var(--font-body); font-size: 13px; font-weight: 600; white-space: nowrap;
+    color: var(--color-text-muted); background: none; cursor: pointer;
+    border: 1px solid var(--color-divider); border-radius: 8px; padding: 6px 12px;
+  }
+  .retry-summary:hover { background: var(--color-surface); }
 
   .paywall-tag {
     display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
@@ -528,7 +540,10 @@ function buildCard(a, index) {
 
   if (a.card_image_url) {
     const bd = el("div", "backdrop");
-    bd.style.backgroundImage = `url("${encodeURI(a.card_image_url)}")`;
+    // already a URL: escape only what would end the CSS string (encodeURI
+    // would re-encode its percent-escapes and break the image)
+    bd.style.backgroundImage =
+      `url("${a.card_image_url.replace(/["\\\n\r]/g, encodeURIComponent)}")`;
     card.appendChild(bd);
   }
   const accent = el("div", "accent");
@@ -557,6 +572,14 @@ function buildCard(a, index) {
     inner.appendChild(el("hr", "divider"));
     inner.appendChild(el("p", "pending-note",
       a.rss_description ? esc(a.rss_description.slice(0, 300)) : "Summary pending…"));
+    const status = el("div", "pending-status",
+      `<span class="dot"></span><span class="pending-text" aria-live="polite"></span>`);
+    const retry = el("button", "retry-summary", "&#8635; Retry summary");
+    retry.title = "Resubmit this story to the AI";
+    retry.onclick = retrySummaries;
+    status.appendChild(retry);
+    inner.appendChild(status);
+    paintPending(card);
   }
 
   const footer = el("div", "card-footer");
@@ -612,13 +635,75 @@ async function expandCard(card, a, btn) {
   card.classList.add("expanded");
 }
 
-/* summarize on demand: only the on-screen story plus the read-ahead window */
-function ensureSummaries(idx) {
+/* summarize on demand: only the story on screen plus the read-ahead window,
+   most urgent first. The backend works on exactly this list, so it is sent
+   whole each time: stories scrolled past drop out of it. */
+let overlayCard = null;     // story opened from the ticker, shown over the stack
+let summaryStates = {};     // article id -> {state, error} from the backend
+
+function wantedIds() {
+  if (tickerOn) return [];
   const ids = [];
-  for (const c of cards.slice(idx, idx + readAhead + 1)) {
-    if (c && !c.processed && !c._requested) { c._requested = true; ids.push(c.id); }
+  if (overlayCard && !overlayCard.processed) ids.push(overlayCard.id);
+  for (const c of cards.slice(currentIndex, currentIndex + readAhead + 1)) {
+    if (c && !c.processed) { c._requested = true; if (!ids.includes(c.id)) ids.push(c.id); }
   }
-  if (ids.length) api().request_summaries(ids);
+  return ids;
+}
+
+/* calls are numbered so the backend and this page both ignore one that is
+   overtaken by a newer one (time-based: still increasing after a reload) */
+let summarySeq = 0, summarySeqShown = 0;
+function nextSummarySeq() { return summarySeq = Math.max(Date.now(), summarySeq + 1); }
+let doneSeen = new Set();   // finished stories the stack has already been refreshed for
+
+function showSummaryStates(res, seq) {
+  // the backend is ahead (clock set back, or a reload): number from its seq
+  summarySeq = Math.max(summarySeq, res.seq || 0);
+  if (seq < summarySeqShown) return false;
+  summarySeqShown = seq;
+  summaryStates = res.states || {};
+  document.querySelectorAll(".card[data-id]").forEach(paintPending);
+  return true;
+}
+
+/* `fetchDone`: pull a summary into the stack as soon as the backend reports
+   it finished (off when the caller has only just refreshed the stack) */
+async function ensureSummaries(fetchDone = true) {
+  const seq = nextSummarySeq();
+  let res;
+  try { res = await api().request_summaries(wantedIds(), seq); }
+  catch (e) { return; }
+  if (!showSummaryStates(res, seq)) return;
+  // once per finished story: a card left as it is (open for reading) stays
+  // "done" until it can be swapped, and the regular refresh handles that
+  const done = Object.keys(summaryStates).filter(id => summaryStates[id].state === "done");
+  const fresh = done.some(id => !doneSeen.has(id));
+  doneSeen = new Set(done);
+  if (fetchDone && !tickerOn && fresh) refreshSummariesInPlace();
+}
+
+/* ↻ on a waiting card: drop whatever is stalled and resubmit the window */
+async function retrySummaries() {
+  toast("Resubmitting to the AI…");
+  const seq = nextSummarySeq();
+  try { showSummaryStates(await api().retry_summaries(wantedIds(), seq), seq); }
+  catch (e) { toast("Couldn't resubmit: " + e); return; }
+  pollAiStatus();
+}
+
+function paintPending(card) {
+  const text = card.querySelector(".pending-text");
+  if (!text) return;
+  const s = summaryStates[card.dataset.id];
+  const [dot, msg] =
+    !s ? ["", "AI summary not requested yet"]
+    : s.state === "done" ? ["", "Summary ready…"]
+    : s.state === "working" ? ["loading", "Summarizing now…"]
+    : s.state === "failed" ? ["error", `Summary failed (${s.error || "unknown error"}). Trying again shortly.`]
+    : ["checking", "Waiting for its turn with the AI…"];
+  card.querySelector(".pending-status .dot").className = "dot " + dot;
+  text.textContent = msg;
 }
 
 /* track the active card; advancing past a card marks it read (spec §4.3) */
@@ -629,7 +714,7 @@ const observer = new IntersectionObserver(entries => {
     const idx = atEnd ? cards.length : parseInt(e.target.dataset.index, 10);
     currentIndex = idx;
     updateProgress(idx);
-    ensureSummaries(idx);
+    ensureSummaries();
     if (idx > 0 && !hintFaded) {
       hintFaded = true;
       document.querySelectorAll(".swipe-hint").forEach(h => h.classList.add("faded"));
@@ -710,7 +795,7 @@ async function showBacklog() {
   }
   updateEndCard();
   updateProgress(currentIndex);
-  ensureSummaries(currentIndex);
+  ensureSummaries();
 }
 
 let stackGen = 0;   // bumped on every full render; in-flight refreshes bail out
@@ -736,14 +821,21 @@ function renderStack(list) {
   observer.observe(endCard);
   updateEndCard();
   updateProgress(0);
-  if (list.length) ensureSummaries(0);
+  ensureSummaries();
 }
 
 /* live stack maintenance: swap in AI summaries as the background pipeline
    finishes them, and append stories the poller found since the last render —
    without this the stack only changes on launch or manual ⟳, and once the
    reader catches up it looks frozen (nothing left to scroll). */
+let refreshing = false;
 async function refreshSummariesInPlace() {
+  if (refreshing) return;
+  refreshing = true;
+  try { await refreshStack(); } finally { refreshing = false; }
+}
+
+async function refreshStack() {
   const gen = stackGen;
   const latest = await api().get_queue(100);
   if (gen !== stackGen) return;
@@ -782,11 +874,10 @@ async function refreshSummariesInPlace() {
   }
   updateEndCard();
   updateProgress(currentIndex);
-  // re-ask for read-ahead stories still waiting on a summary (a server was
-  // loading, down, or timed out); the backend skips any already in flight
-  // or that failed moments ago
+  // tell the backend what the reader is waiting on now; it retries stories
+  // whose summary failed (a server was loading, down, or timed out)
   cards.forEach(c => { if (!c.processed) delete c._requested; });
-  ensureSummaries(currentIndex);
+  ensureSummaries(false);
 }
 
 /* keyboard: arrows / space advance the stack */
@@ -985,7 +1076,7 @@ $("btn-save-settings").onclick = async () => {
   }
   // settings may have enabled a backend or widened the window — re-request
   cards.forEach(c => delete c._requested);
-  ensureSummaries(currentIndex);
+  ensureSummaries();
   pollAiStatus();
   $("settings-saved").textContent = "Saved ✓";
   setTimeout(() => { $("settings-saved").textContent = ""; }, 2500);
@@ -1361,6 +1452,7 @@ async function enterTicker() {
   document.body.classList.add("ticker");
   $("ticker-track").innerHTML = ""; tkOffset = 0; tkLastId = null; tkLast = 0;
   tkNote("Starting ticker…", "", "checking");
+  ensureSummaries();   // nothing is wanted while the reader is hidden: the model is the ticker's
   await api().enter_ticker(Math.round(tk.font * 2.4) + TITLE_BAR_PX);
   if (gen !== tkGen) return;
   await tkRefresh();
@@ -1387,6 +1479,8 @@ async function exitTicker(toIndex) {
   // the hidden stack lost its scroll position; put the reader back
   const target = document.querySelector(
     `#stack .card[data-index="${toIndex ?? tkReaderIndex}"]`);
+  // jumping to a story picked from the tape is not reading the ones skipped
+  if (target && toIndex !== undefined) maxSeenIndex = Math.max(maxSeenIndex, toIndex);
   if (target) $("stack").scrollTop = target.offsetTop;
   refreshSummariesInPlace();
 }
@@ -1404,20 +1498,23 @@ async function openFromTicker(id) {
   if (!a) { toast("That story is no longer available"); return; }
   showOverlayCard(a);
   if (!a.processed) {
-    api().request_summaries([id]);
+    ensureSummaries();   // the overlay story goes to the front of the window
     clearInterval(overlayTimer);
     overlayTimer = setInterval(async () => {
       if (!$("story-overlay").classList.contains("open")) return clearInterval(overlayTimer);
       const fresh = await api().get_card(id);
-      if (fresh && fresh.processed) { clearInterval(overlayTimer); showOverlayCard(fresh); }
-      else api().request_summaries([id]);   // backend skips it while in flight
-    }, 4000);
+      if (fresh && fresh.processed && overlayCard && overlayCard.id === id) {
+        clearInterval(overlayTimer);
+        showOverlayCard(fresh);
+      }
+    }, 2000);
   }
 }
 
 function showOverlayCard(a) {
   const ov = $("story-overlay");
   ov.innerHTML = "";
+  overlayCard = a;
   const card = buildCard(a, -1);
   card.querySelector(".swipe-hint")?.remove();
   ov.appendChild(card);
@@ -1430,8 +1527,10 @@ function showOverlayCard(a) {
 
 function closeOverlay() {
   clearInterval(overlayTimer);
+  overlayCard = null;
   $("story-overlay").classList.remove("open");
   $("story-overlay").innerHTML = "";
+  ensureSummaries();
 }
 
 $("btn-ticker").onclick = enterTicker;
@@ -1451,7 +1550,15 @@ async function init() {
   pollAiStatus();
   setInterval(pollAiStatus, 2000);
   renderStack(await api().get_queue(100));
-  setInterval(() => { if (!tickerOn) refreshSummariesInPlace(); }, 8000);
+  // a finished summary shows within 2 s while the reader is waiting on one:
+  // a light state check that fetches the stack only once one is done.
+  // Otherwise the stack only needs the occasional look for new stories.
+  let tick = 0;
+  setInterval(() => {
+    if (tickerOn) return;
+    if (++tick % 4 === 0) refreshSummariesInPlace();
+    else if (wantedIds().length) ensureSummaries();
+  }, 2000);
   applyTickerSettings(s);
 }
 window.addEventListener("pywebviewready", init);

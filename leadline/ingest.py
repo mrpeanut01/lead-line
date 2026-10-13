@@ -6,6 +6,7 @@ Newspaper4k. robots.txt is respected (spec §12).
 """
 import hashlib
 import re
+import time
 import urllib.robotparser
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -20,7 +21,8 @@ from . import config, store
 USER_AGENT = "LeadLine/1.0 (personal news reader)"
 TRACKING_PARAMS = re.compile(r"^(utm_|fbclid|gclid|mc_|ref$|ref_|cmpid|ito$)", re.I)
 
-_robots_cache = {}
+_robots_cache = {}   # host -> (parser, time to ask again, or None for a real answer)
+ROBOTS_RETRY_SECONDS = 600
 
 
 def canonicalize_url(url):
@@ -66,10 +68,10 @@ def poll_feed(feed):
         return 0
     if resp.status_code != 200:
         return 0
-    store.update_feed_fetch_meta(
-        feed["id"], resp.headers.get("ETag"), resp.headers.get("Last-Modified"))
-
     parsed = feedparser.parse(resp.content)
+    if parsed.entries or not parsed.bozo:   # not an error page served as 200: that is asked for again
+        store.update_feed_fetch_meta(
+            feed["id"], resp.headers.get("ETag"), resp.headers.get("Last-Modified"))
     new = 0
     for entry in parsed.entries[:50]:
         link = entry.get("link")
@@ -92,13 +94,22 @@ def poll_all_feeds():
     if not feeds:
         return 0
     with ThreadPoolExecutor(max_workers=min(8, len(feeds))) as pool:
-        return sum(pool.map(poll_feed, feeds))
+        return sum(pool.map(_poll_feed_safely, feeds))
+
+
+def _poll_feed_safely(feed):
+    """One feed's malformed entry must not cost the others their poll."""
+    try:
+        return poll_feed(feed)
+    except Exception as e:
+        print(f"[ingest] {feed['name']}: {e}")
+        return 0
 
 
 # --- extraction ---
 
 class _ArticleHTMLParser(HTMLParser):
-    """Minimal readability: harvest <p> text, prefer <article> scope, grab og:image."""
+    """Minimal readability: harvest <p> text outside page chrome, grab og:image."""
 
     SKIP = {"script", "style", "nav", "header", "footer", "aside", "form", "figure"}
 
@@ -136,39 +147,79 @@ class _ArticleHTMLParser(HTMLParser):
 
 def _robots_allowed(url):
     host = urlparse(url).scheme + "://" + urlparse(url).netloc
-    rp = _robots_cache.get(host)
-    if rp is None:
+    rp, retry_at = _robots_cache.get(host, (None, None))
+    if rp is None or (retry_at and time.time() > retry_at):
+        retry_at = None
+        # fetched here rather than with rp.read(), which has no timeout: one
+        # unresponsive host would hang the pipeline and every summary behind it
         rp = urllib.robotparser.RobotFileParser(host + "/robots.txt")
         try:
-            rp.read()
+            resp = requests.get(host + "/robots.txt", headers={"User-Agent": USER_AGENT},
+                                timeout=10)
+            if resp.status_code >= 500:   # an outage, not an answer: ask again later
+                rp.disallow_all = True
+                retry_at = time.time() + ROBOTS_RETRY_SECONDS
+            elif resp.status_code in (401, 403):
+                rp.disallow_all = True
+            elif resp.status_code >= 400:
+                rp.allow_all = True
+            else:
+                rp.parse(resp.text.splitlines())
         except Exception:
             rp.allow_all = True
-        _robots_cache[host] = rp
+            retry_at = time.time() + ROBOTS_RETRY_SECONDS
+        _robots_cache[host] = (rp, retry_at)
     try:
         return rp.can_fetch(USER_AGENT, url)
     except Exception:
         return True
 
 
+FETCH_ATTEMPTS = 3     # then a site that stays down is treated like a paywall
+_fetch_failures = {}   # article id -> fetches that found the site down or busy
+
+
+def _html_text(resp):
+    """The page as text. With no charset in the header requests assumes
+    ISO-8859-1, which garbles the UTF-8 most pages are actually in."""
+    if "charset" in resp.headers.get("Content-Type", "").lower():
+        return resp.text
+    try:
+        return resp.content.decode("utf-8")
+    except UnicodeDecodeError:
+        resp.encoding = resp.apparent_encoding
+        return resp.text
+
+
 def extract_article(article):
-    """Fetch + extract body; detect paywall by word count (spec §5.2)."""
+    """Fetch + extract body; detect paywall by word count (spec §5.2). A site
+    that is down or busy is not a paywall: nothing is saved, so the story is
+    fetched again later (a few times, so a dead site can't hold up the rest)."""
     body, image = "", None
     if _robots_allowed(article["canonical_url"]):
         try:
             resp = requests.get(article["canonical_url"],
                                 headers={"User-Agent": USER_AGENT}, timeout=20)
-            if resp.ok:
+        except requests.RequestException:
+            resp = None
+        if resp is None or resp.status_code == 429 or resp.status_code >= 500:
+            _fetch_failures[article["id"]] = _fetch_failures.get(article["id"], 0) + 1
+            if _fetch_failures[article["id"]] < FETCH_ATTEMPTS:
+                return
+        try:
+            if resp is not None and resp.ok:
                 parser = _ArticleHTMLParser()
-                parser.feed(resp.text)
+                parser.feed(_html_text(resp))
                 body = "\n\n".join(parser.paragraphs)
                 image = parser.og_image
-        except (requests.RequestException, Exception):
+        except Exception:
             pass
 
     paywalled = len(body.split()) < config.PAYWALL_WORD_THRESHOLD
     if paywalled:
         # Summarize from the RSS description only (spec §5.2)
         body = article.get("rss_description") or ""
+    _fetch_failures.pop(article["id"], None)
     store.save_extraction(article["id"], body, paywalled, image)
 
 
