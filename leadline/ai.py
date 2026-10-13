@@ -64,8 +64,7 @@ def build_prompt(article, source_name):
     return PROMPT_TEMPLATE.format(
         original_headline=article["original_headline"],
         source_name=source_name or "Unknown",
-        # no text (the site was unreachable): the feed's own description
-        body=(article.get("body_text") or article.get("rss_description") or "")[:4000],
+        body=(article.get("body_text") or "")[:4000],
     )
 
 
@@ -658,39 +657,20 @@ def summarize(article, source_name):
     raise RuntimeError("; ".join(errors))
 
 
-def ensure_body(article_id):
-    """Fetch a story's text ahead of its turn with the model. None means never
-    extracted or TTL-purged; '' means extraction found nothing, so don't refetch."""
-    with _body_guard:
-        lock = _body_locks.setdefault(article_id, threading.Lock())
-    # a second caller waits for the fetch instead of repeating it; if the site
-    # was down, extract_article itself declines to ask again so soon
-    with lock:
-        article = store.get_article(article_id)
-        if article and not article["processed"] and article["body_text"] is None:
-            ingest.extract_article(article)
-
-
-_body_guard = threading.Lock()
-_body_locks = {}   # article id -> its fetch lock, kept for the session so every caller shares it
-
-
 def summarize_article(article_id, epoch=None):
     """Summarize one story, on demand only. Raises RuntimeError if every
-    enabled server failed; the card keeps its original headline meanwhile.
+    enabled server failed, or ingest.SiteDown while the story's site is down
+    (better to try again than to summarize the feed's blurb); the card keeps
+    its original headline meanwhile.
     `epoch` is abort_epoch() from when the story was picked: an abandon()
     since then cancels it wherever it has got to."""
     _call.epoch = epoch
     try:
         _check_cancelled()   # before waiting on a fetch already under way
-        ensure_body(article_id)
+        article = ingest.ensure_body(article_id)
         _check_cancelled()
-        article = store.get_article(article_id)
         if not article or article["processed"]:
             return
-        if article["body_text"] is None and ingest.fetch_pending(article_id):
-            # fail rather than summarize the feed's blurb: the retry fetches again
-            raise RuntimeError("article site unreachable")
         feeds = {f["id"]: f["name"] for f in store.get_feeds()}
         summary, provider, model = summarize(article, feeds.get(article["feed_source_id"]))
         store.save_summary(article_id, summary, provider, model)

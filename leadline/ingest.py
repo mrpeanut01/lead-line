@@ -6,6 +6,7 @@ Newspaper4k. robots.txt is respected (spec §12).
 """
 import hashlib
 import re
+import threading
 import time
 import urllib.robotparser
 from concurrent.futures import ThreadPoolExecutor
@@ -22,7 +23,7 @@ USER_AGENT = "LeadLine/1.0 (personal news reader)"
 TRACKING_PARAMS = re.compile(r"^(utm_|fbclid|gclid|mc_|ref$|ref_|cmpid|ito$)", re.I)
 
 _robots_cache = {}   # host -> (parser, time to ask again, or None for a real answer)
-ROBOTS_RETRY_SECONDS = 600
+ROBOTS_RETRY_SECONDS = 60   # before asking for a robots.txt that could not be read again
 
 
 def canonicalize_url(url):
@@ -145,9 +146,19 @@ class _ArticleHTMLParser(HTMLParser):
             self._buf.append(data)
 
 
+class SiteDown(Exception):
+    """The story's site, or its robots.txt, is down or busy. `retry_at` is the
+    earliest time worth asking again."""
+
+    def __init__(self, retry_at):
+        super().__init__("article site unreachable")
+        self.retry_at = retry_at
+
+
 def _robots_allowed(url):
-    """True or False from the site's robots.txt; None while it can't be read
-    (5xx, timeout, connection error): not fetched, and asked again later."""
+    """Whether the site's robots.txt lets us fetch url. Raises SiteDown while
+    robots.txt can't be read (5xx, timeout, connection error): the page is not
+    fetched on a guess."""
     host = urlparse(url).scheme + "://" + urlparse(url).netloc
     rp, retry_at = _robots_cache.get(host, (None, None))
     if rp is None or (retry_at and time.time() > retry_at):
@@ -170,22 +181,11 @@ def _robots_allowed(url):
             retry_at = time.time() + ROBOTS_RETRY_SECONDS
         _robots_cache[host] = (rp, retry_at)
     if retry_at:
-        return None
+        raise SiteDown(retry_at)
     try:
         return rp.can_fetch(USER_AGENT, url)
     except Exception:
         return True
-
-
-FETCH_ATTEMPTS = 3     # then a site that stays down is treated like a paywall
-FETCH_RETRY_SECONDS = 20   # a site that was just down is not asked again sooner
-_fetch_failures = {}   # article id -> (fetches that found the site down or busy, time of the last)
-
-
-def fetch_pending(article_id):
-    """True while the story's site was down or busy and tries remain: its
-    text is still worth waiting for."""
-    return article_id in _fetch_failures
 
 
 def _html_text(resp):
@@ -200,30 +200,56 @@ def _html_text(resp):
         return resp.text
 
 
-def extract_article(article):
-    """Fetch + extract body; detect paywall by word count (spec §5.2). A site
-    that is down or busy is not a paywall: nothing is saved, so the story is
-    fetched again later (a few times, so a dead site can't hold up the rest)."""
-    body, image = "", None
-    failures, failed_at = _fetch_failures.get(article["id"], (0, 0))
-    if time.time() - failed_at < FETCH_RETRY_SECONDS:
-        return   # another caller just found it down: neither refetch nor count again
-    allowed = _robots_allowed(article["canonical_url"])
-    resp, down = None, allowed is None
-    if allowed:
-        try:
+# --- a story's text, and what happens while its site is down ---
+#
+# ensure_body() is the one way in. A site that is down or busy is not a
+# paywall: nothing is saved and SiteDown says when to ask again. After
+# FETCH_ATTEMPTS the story falls back to the feed's description, so a dead site
+# can't hold a story (or the extraction pass) up for good.
+
+FETCH_ATTEMPTS = 3
+FETCH_RETRY_SECONDS = 20   # before asking a page that was just down or busy again
+_fetch_failures = {}   # article id -> (times its site was found down, when to ask again)
+_fetch_guard = threading.Lock()
+_fetch_locks = {}      # article id -> its fetch lock, kept for the session so every caller shares it
+
+
+def ensure_body(article_id):
+    """The story's row with its text fetched if it wasn't there (body_text is
+    None: never extracted, or TTL-purged; '' means extraction found nothing, so
+    it isn't refetched). None if the story is gone. Raises SiteDown while its
+    site is down and tries remain. Callers that overlap share one fetch."""
+    with _fetch_guard:
+        lock = _fetch_locks.setdefault(article_id, threading.Lock())
+    with lock:
+        article = store.get_article(article_id)
+        if article and article["body_text"] is None:
+            _extract(article)
+            article = store.get_article(article_id)
+        return article
+
+
+def _extract(article):
+    """Fetch + extract body; detect paywall by word count (spec §5.2)."""
+    failures, retry_at = _fetch_failures.get(article["id"], (0, 0))
+    if time.time() < retry_at:
+        raise SiteDown(retry_at)
+    body, image, resp, down = "", None, None, None
+    try:
+        if _robots_allowed(article["canonical_url"]):
             resp = requests.get(article["canonical_url"],
                                 headers={"User-Agent": USER_AGENT}, timeout=20)
-            down = resp.status_code == 429 or resp.status_code >= 500
-        except requests.RequestException:
-            down = True
-    if down:
-        # counted from the read above, so callers that overlapped count once
-        _fetch_failures[article["id"]] = (failures + 1, time.time())
-        if failures + 1 < FETCH_ATTEMPTS:
-            return
+            if resp.status_code == 429 or resp.status_code >= 500:
+                raise SiteDown(time.time() + FETCH_RETRY_SECONDS)
+    except requests.RequestException:
+        down = SiteDown(time.time() + FETCH_RETRY_SECONDS)
+    except SiteDown as e:
+        down = e
+    if down and failures + 1 < FETCH_ATTEMPTS:
+        _fetch_failures[article["id"]] = (failures + 1, down.retry_at)
+        raise down
     try:
-        if resp is not None and resp.ok:
+        if not down and resp is not None and resp.ok:
             parser = _ArticleHTMLParser()
             parser.feed(_html_text(resp))
             body = "\n\n".join(parser.paragraphs)
@@ -243,5 +269,8 @@ def extract_article(article):
 def extract_pending():
     articles = store.articles_needing_extraction()
     for a in articles:
-        extract_article(a)
+        try:
+            ensure_body(a["id"])
+        except SiteDown:
+            pass   # asked again on a later pass
     return len(articles)

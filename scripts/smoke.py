@@ -52,6 +52,27 @@ class Page:
 
 assert ingest._html_text(Page()) == "<p>café</p>"
 
+# a site that is down: asked again (not saved) until the attempts run out, then
+# the feed's description without the paywall tag
+import requests  # noqa: E402
+
+
+def unreachable(url, **kwargs):
+    raise requests.ConnectionError()
+
+
+ingest.requests.get, real_get = unreachable, ingest.requests.get
+ingest.FETCH_RETRY_SECONDS = ingest.ROBOTS_RETRY_SECONDS = 0
+for attempt in range(ingest.FETCH_ATTEMPTS - 1):
+    try:
+        ingest.ensure_body(queue[0]["id"])
+        raise SystemExit("a down site was saved on attempt %d" % (attempt + 1))
+    except ingest.SiteDown:
+        assert store.get_article(queue[0]["id"])["body_text"] is None
+row = ingest.ensure_body(queue[0]["id"])
+assert (row["body_text"], row["is_paywalled"]) == ("desc", 0), dict(row)
+ingest.requests.get = real_get
+
 # summary validation
 good = ('{"straight_headline": "H", "bluf_bullets": ["a", "b", "c"], "one_sentence": "s",'
         ' "topic_tags": ["t"], "confidence": 2}')
@@ -65,7 +86,7 @@ except ValueError:
 # summary queue: most urgent first, done reported, late request ignored
 article = queue[0]
 done = []
-ai.ensure_body = lambda article_id: None
+ingest.ensure_body = lambda article_id: None
 ai.note_demand = lambda: None
 ai.summarize_article = lambda article_id, epoch=None: done.append(article_id)
 bridge = api.Api()

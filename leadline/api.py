@@ -51,13 +51,12 @@ class Api:
 
     def get_body(self, article_id):
         """Body for inline expanded reading mode; re-extract if TTL-purged."""
-        article = store.get_article(article_id)
+        try:
+            article = ingest.ensure_body(article_id)
+        except ingest.SiteDown:   # the feed's description meanwhile
+            article = store.get_article(article_id)
         if not article:
             return {"body": ""}
-        if not article["body_text"]:
-            ingest.extract_article(article)
-            article = store.get_article(article_id)
-        # still None while its site is down: the feed's description meanwhile
         return {"body": article["body_text"] or article["rss_description"] or "",
                 "is_paywalled": bool(article["is_paywalled"])}
 
@@ -94,7 +93,7 @@ class Api:
                 del self._bodies[i]
             for i in ids:   # article text downloads while earlier stories summarize
                 if i not in self._bodies:
-                    self._bodies[i] = self._fetch_pool.submit(ai.ensure_body, i)
+                    self._bodies[i] = self._fetch_pool.submit(ingest.ensure_body, i)
             self._work.notify_all()
             states = self._summary_states(asked)
             if self._working is not None and self._working not in ids:
@@ -163,7 +162,7 @@ class Api:
         waiting on at that moment."""
         while True:
             article_id, gen, body, epoch = self._next_summary()
-            error = None
+            error, site_retry_at = None, None
             try:
                 waited = time.time()
                 # if the fetch fails or outlasts this, summarize_article fetches it itself
@@ -173,6 +172,8 @@ class Api:
                 ai.summarize_article(article_id, epoch)
             except ai.Cancelled:
                 error = ""     # resubmitted: goes again at once
+            except ingest.SiteDown as e:
+                error, site_retry_at = str(e), e.retry_at
             except Exception as e:
                 error = (str(e) or type(e).__name__)[:200]
             with self._work:
@@ -184,8 +185,11 @@ class Api:
                         self._done.add(article_id)
                 elif error and gen == self._retry_gen:
                     again = self._failed.get(article_id)
-                    delay = (min(again[2] * 2, SUMMARY_RETRY_MAX_SECONDS) if again
-                             else SUMMARY_RETRY_SECONDS)
+                    if site_retry_at:   # its site is down: back when it may be asked again
+                        delay = max(1, site_retry_at - time.time())
+                    else:
+                        delay = (min(again[2] * 2, SUMMARY_RETRY_MAX_SECONDS) if again
+                                 else SUMMARY_RETRY_SECONDS)
                     self._failed[article_id] = (time.time(), error, delay)
 
     # --- ticker view (Ollama only) ---
