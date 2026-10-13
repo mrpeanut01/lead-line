@@ -687,6 +687,8 @@ def summarize_article(article_id, epoch=None):
     enabled server failed; the card keeps its original headline meanwhile.
     `epoch` is abort_epoch() from when the story was picked: an abandon()
     since then cancels it wherever it has got to."""
+    from . import ingest
+
     _call.epoch = epoch
     try:
         _check_cancelled()   # before waiting on a fetch already under way
@@ -695,6 +697,9 @@ def summarize_article(article_id, epoch=None):
         article = store.get_article(article_id)
         if not article or article["processed"]:
             return
+        if article["body_text"] is None and ingest.fetch_pending(article_id):
+            # fail rather than summarize the feed's blurb: the retry fetches again
+            raise RuntimeError("article site unreachable")
         feeds = {f["id"]: f["name"] for f in store.get_feeds()}
         summary, provider, model = summarize(article, feeds.get(article["feed_source_id"]))
         store.save_summary(article_id, summary, provider, model)

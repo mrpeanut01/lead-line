@@ -179,6 +179,12 @@ FETCH_ATTEMPTS = 3     # then a site that stays down is treated like a paywall
 _fetch_failures = {}   # article id -> fetches that found the site down or busy
 
 
+def fetch_pending(article_id):
+    """True while the story's site was down or busy and tries remain: its
+    text is still worth waiting for."""
+    return article_id in _fetch_failures
+
+
 def _html_text(resp):
     """The page as text. With no charset in the header requests assumes
     ISO-8859-1, which garbles the UTF-8 most pages are actually in."""
