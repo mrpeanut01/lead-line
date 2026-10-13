@@ -219,8 +219,10 @@ def forget_failures():
     """The reader asked to try again now: sites found down (and robots.txt
     files that couldn't be read) are asked again at once, with fresh tries."""
     _fetch_failures.clear()
-    for host in [h for h, (_, retry_at) in _robots_cache.items() if retry_at]:
-        del _robots_cache[host]
+    # a snapshot: fetch threads add hosts to the cache while this runs
+    for host, (_, retry_at) in list(_robots_cache.items()):
+        if retry_at:
+            _robots_cache.pop(host, None)
 
 
 def ensure_body(article_id, for_reader=True):
