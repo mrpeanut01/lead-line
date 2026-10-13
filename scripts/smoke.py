@@ -83,21 +83,24 @@ try:
 except ValueError:
     pass
 
-# summary queue: most urgent first, done reported, late request ignored
+# summary queue: a wanted story is summarized and comes back with its card; a
+# story that no longer exists is reported, not queued
 article = queue[0]
-done = []
+summary = ai._parse_summary(good)
 ingest.ensure_body = lambda article_id: None
 ai.note_demand = lambda: None
-ai.summarize_article = lambda article_id, epoch=None: done.append(article_id)
+ai.summarize_article = lambda article_id, epoch=None: store.save_summary(
+    article_id, summary, "ollama", "smoke")
 bridge = api.Api()
-states = bridge.request_summaries([article["id"], "missing"], 2)["states"]
-assert set(states) == {article["id"], "missing"}
+states = bridge.request_summaries([article["id"], "missing"])["states"]
+assert states["missing"] == {"state": "gone"}, states
+assert states[article["id"]]["state"] in ("queued", "working"), states
 for _ in range(50):
-    if len(done) == 2:
+    state = bridge.request_summaries([article["id"]])["states"][article["id"]]
+    if state["state"] == "done":
         break
     time.sleep(0.1)
-assert done == [article["id"], "missing"], done
-assert bridge.request_summaries([article["id"]], 1)["seq"] == 2   # older call changes nothing
-assert bridge.request_summaries([article["id"]], 3)["states"][article["id"]]["state"] == "done"
+assert state["state"] == "done" and state["card"]["straight_headline"] == "H", state
+assert bridge.request_summaries([])["states"] == {}
 
 print("smoke ok")

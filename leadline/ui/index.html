@@ -639,56 +639,81 @@ async function expandCard(card, a, btn) {
    most urgent first. The backend works on exactly this list, so it is sent
    whole each time: stories scrolled past drop out of it. */
 let overlayCard = null;     // story opened from the ticker, shown over the stack
-let summaryStates = {};     // article id -> {state, error} from the backend
+let summaryStates = {};     // article id -> {state, error | card} from the backend
 
 function wantedIds() {
   if (tickerOn) return [];
   const ids = [];
-  if (overlayCard && !overlayCard.processed) ids.push(overlayCard.id);
-  for (const c of cards.slice(currentIndex, currentIndex + readAhead + 1)) {
-    if (c && !c.processed) { c._requested = true; if (!ids.includes(c.id)) ids.push(c.id); }
-  }
+  const want = c => { if (c && !c.processed && !c._gone && !ids.includes(c.id)) ids.push(c.id); };
+  want(overlayCard);
+  cards.slice(currentIndex, currentIndex + readAhead + 1).forEach(want);
   return ids;
 }
 
-/* calls are numbered so the backend and this page both ignore one that is
-   overtaken by a newer one (time-based: still increasing after a reload) */
-let summarySeq = 0, summarySeqShown = 0;
-function nextSummarySeq() { return summarySeq = Math.max(Date.now(), summarySeq + 1); }
-let doneSeen = new Set();   // finished stories the stack has already been refreshed for
-
-function showSummaryStates(res, seq) {
-  // the backend is ahead (clock set back, or a reload): number from its seq
-  summarySeq = Math.max(summarySeq, res.seq || 0);
-  if (seq < summarySeqShown) return false;
-  summarySeqShown = seq;
-  summaryStates = res.states || {};
-  document.querySelectorAll(".card[data-id]").forEach(paintPending);
-  return true;
+/* one call at a time, so the backend sees windows in the order they were
+   made: a change while one is in flight is sent when its reply lands */
+let summaryBusy = false, summaryDirty = false, summaryRetry = false;
+async function ensureSummaries() {
+  if (summaryBusy) { summaryDirty = true; return; }
+  summaryBusy = true;
+  try {
+    do {
+      summaryDirty = false;
+      const retry = summaryRetry;
+      summaryRetry = false;
+      let res;
+      try {
+        res = await (retry ? api().retry_summaries(wantedIds())
+                           : api().request_summaries(wantedIds()));
+      } catch (e) {
+        if (retry) toast("Couldn't resubmit: " + e);
+        break;
+      }
+      showSummaryStates(res.states || {});
+    } while (summaryDirty);
+  } finally { summaryBusy = false; }
 }
 
-/* `fetchDone`: pull a summary into the stack as soon as the backend reports
-   it finished (off when the caller has only just refreshed the stack) */
-async function ensureSummaries(fetchDone = true) {
-  const seq = nextSummarySeq();
-  let res;
-  try { res = await api().request_summaries(wantedIds(), seq); }
-  catch (e) { return; }
-  if (!showSummaryStates(res, seq)) return;
-  // once per finished story: a card left as it is (open for reading) stays
-  // "done" until it can be swapped, and the regular refresh handles that
-  const done = Object.keys(summaryStates).filter(id => summaryStates[id].state === "done");
-  const fresh = done.some(id => !doneSeen.has(id));
-  doneSeen = new Set(done);
-  if (fetchDone && !tickerOn && fresh) refreshSummariesInPlace();
+/* a finished story arrives with its card: swap it in, repaint the rest */
+function showSummaryStates(states) {
+  summaryStates = states;
+  for (const [id, s] of Object.entries(states)) {
+    if (s.state === "done") showSummary(s.card);
+    else if (s.state === "gone") {
+      for (const c of [overlayCard, ...cards]) if (c && c.id === id) c._gone = true;
+    }
+  }
+  document.querySelectorAll(".card[data-id]").forEach(paintPending);
+}
+
+/* don't yank a card the reader has open (or is opening); it is swapped later */
+const cardInUse = cardEl =>
+  cardEl.classList.contains("expanded") || !!cardEl.querySelector(".read-full:disabled");
+
+function swapCard(cardEl, idx, updated) {
+  cards[idx] = Object.assign(updated, { _read: cards[idx]._read });
+  const fresh = buildCard(cards[idx], idx);
+  observer.unobserve(cardEl);
+  cardEl.replaceWith(fresh);
+  observer.observe(fresh);
+}
+
+function showSummary(card) {
+  if (overlayCard && overlayCard.id === card.id && !overlayCard.processed) {
+    const shown = document.querySelector("#story-overlay .card");
+    if (shown && !cardInUse(shown)) showOverlayCard(card);
+  }
+  const idx = cards.findIndex(c => c.id === card.id);
+  if (idx < 0 || cards[idx].processed) return;
+  const cardEl = document.querySelector(`#stack .card[data-index="${idx}"]`);
+  if (cardEl && !cardInUse(cardEl)) swapCard(cardEl, idx, card);
 }
 
 /* ↻ on a waiting card: drop whatever is stalled and resubmit the window */
 async function retrySummaries() {
   toast("Resubmitting to the AI…");
-  const seq = nextSummarySeq();
-  try { showSummaryStates(await api().retry_summaries(wantedIds(), seq), seq); }
-  catch (e) { toast("Couldn't resubmit: " + e); return; }
+  summaryRetry = true;
+  await ensureSummaries();
   pollAiStatus();
 }
 
@@ -699,6 +724,7 @@ function paintPending(card) {
   const [dot, msg] =
     !s ? ["", "AI summary not requested yet"]
     : s.state === "done" ? ["", "Summary ready…"]
+    : s.state === "gone" ? ["", "This story is no longer available"]
     : s.state === "working" ? ["loading", "Summarizing now…"]
     : s.state === "failed" ? ["error", `Summary failed (${s.error || "unknown error"}). Trying again shortly.`]
     : ["checking", "Waiting for its turn with the AI…"];
@@ -850,23 +876,14 @@ async function refreshStack() {
     return;
   }
   const byId = Object.fromEntries(latest.map(a => [a.id, a]));
-  // requested cards outside the queue (revealed backlog, past the first 100)
-  const missing = cards.filter(c => c._requested && !c.processed && !byId[c.id]);
-  const extra = await Promise.all(missing.map(c => api().get_card(c.id).catch(() => null)));
-  if (gen !== stackGen) return;
-  for (const a of extra) if (a) byId[a.id] = a;
-  document.querySelectorAll(".card:not(.end-card)").forEach(cardEl => {
+  // stories summarized after they left the wanted window (the ones in it get
+  // their card from request_summaries)
+  document.querySelectorAll("#stack .card:not(.end-card)").forEach(cardEl => {
     const idx = parseInt(cardEl.dataset.index, 10);
     const current = cards[idx];
     const updated = byId[cardEl.dataset.id];
-    // don't yank a card the reader has open (or is opening); swap it later
-    if (cardEl.classList.contains("expanded") || cardEl.querySelector(".read-full:disabled")) return;
-    if (current && updated && !current.processed && updated.processed) {
-      cards[idx] = Object.assign(updated, { _read: current._read, _requested: current._requested });
-      const fresh = buildCard(cards[idx], idx);
-      observer.unobserve(cardEl);
-      cardEl.replaceWith(fresh);
-      observer.observe(fresh);
+    if (current && updated && !current.processed && updated.processed && !cardInUse(cardEl)) {
+      swapCard(cardEl, idx, updated);
     }
   });
   const have = new Set(cards.map(c => c.id));
@@ -880,10 +897,8 @@ async function refreshStack() {
   }
   updateEndCard();
   updateProgress(currentIndex);
-  // tell the backend what the reader is waiting on now; it retries stories
-  // whose summary failed (a server was loading, down, or timed out)
-  cards.forEach(c => { if (!c.processed) delete c._requested; });
-  ensureSummaries(false);
+  // tell the backend what the reader is waiting on now
+  ensureSummaries();
 }
 
 /* keyboard: arrows / space advance the stack */
@@ -1494,7 +1509,6 @@ async function exitTicker(toIndex) {
    in the stack, otherwise show it over the stack (it may be read, or older
    than the queue offers). A story not yet summarized is requested and the
    card fills in when the summary lands. */
-let overlayTimer = 0;
 async function openFromTicker(id) {
   const idx = cards.findIndex(c => c.id === id);
   await exitTicker(idx >= 0 ? idx : undefined);
@@ -1502,18 +1516,9 @@ async function openFromTicker(id) {
   const a = await api().get_card(id);
   if (!a) { toast("That story is no longer available"); return; }
   showOverlayCard(a);
-  if (!a.processed) {
-    ensureSummaries();   // the overlay story goes to the front of the window
-    clearInterval(overlayTimer);
-    overlayTimer = setInterval(async () => {
-      if (!$("story-overlay").classList.contains("open")) return clearInterval(overlayTimer);
-      const fresh = await api().get_card(id);
-      if (fresh && fresh.processed && overlayCard && overlayCard.id === id) {
-        clearInterval(overlayTimer);
-        showOverlayCard(fresh);
-      }
-    }, 2000);
-  }
+  // the overlay story goes to the front of the window; its summary arrives
+  // through the same states poll as the stack's
+  if (!a.processed) ensureSummaries();
 }
 
 function showOverlayCard(a) {
@@ -1531,7 +1536,6 @@ function showOverlayCard(a) {
 }
 
 function closeOverlay() {
-  clearInterval(overlayTimer);
   overlayCard = null;
   $("story-overlay").classList.remove("open");
   $("story-overlay").innerHTML = "";

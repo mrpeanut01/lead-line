@@ -27,8 +27,6 @@ class Api:
         self._work = threading.Condition()
         self._wanted = []    # stories the reader is waiting on, most urgent first
         self._working = None   # the one being summarized right now
-        self._wanted_seq = 0   # newest request_summaries applied; late older ones are ignored
-        self._done = set()   # wanted stories finished since the UI last caught up
         self._failed = {}    # article id -> (time its summary last failed, why, wait before retry)
         self._retry_gen = 0  # bumped by retry_summaries; older failures don't count
         self._bodies = {}    # article id -> Future fetching its text ahead of its turn
@@ -68,21 +66,24 @@ class Api:
         store.mark_read(article_id)
         return True
 
-    def request_summaries(self, article_ids, seq):
+    def request_summaries(self, article_ids):
         """The stories the reader is waiting on, most urgent first: the one on
         screen, then the read-ahead window. Each call replaces the last, so a
         story scrolled past stops costing model time and the one on screen is
         never stuck behind it. Stories are only summarized on demand — never
-        pre-processed en masse. Returns each story's state for its card. `seq`
-        orders the UI's calls: one that arrives after a newer one changes nothing,
-        and the reply carries the newest seq so a page that fell behind catches up."""
+        pre-processed en masse. Returns each story's state for its card; a
+        finished one comes with the card itself. The page sends one call at a
+        time, so calls arrive in the order it made them."""
         asked = list(dict.fromkeys(article_ids))
+        states = {}
+        for i in asked:   # already summarized (or gone): nothing to queue
+            card = store.get_card(i)
+            if not card:
+                states[i] = {"state": "gone"}
+            elif card["processed"]:
+                states[i] = {"state": "done", "card": card}
         with self._work:
-            if seq <= self._wanted_seq:
-                return {"seq": self._wanted_seq, "states": self._summary_states(asked)}
-            self._wanted_seq = seq
-            self._done.intersection_update(asked)
-            ids = [i for i in asked if i not in self._done]
+            ids = [i for i in asked if i not in states]
             new = [i for i in ids if i not in self._wanted]
             self._wanted = ids
             for i in [i for i in self._failed if i not in ids]:
@@ -95,16 +96,16 @@ class Api:
                 if i not in self._bodies:
                     self._bodies[i] = self._fetch_pool.submit(ingest.ensure_body, i)
             self._work.notify_all()
-            states = self._summary_states(asked)
+            states.update(self._summary_states(ids))
             if self._working is not None and self._working not in ids:
                 # the story being summarized was scrolled past. Under the lock,
                 # so the worker can't have moved on to one that is still wanted
                 ai.abandon()
         if new:
             ai.note_demand()
-        return {"seq": seq, "states": states}
+        return {"states": states}
 
-    def retry_summaries(self, article_ids, seq):
+    def retry_summaries(self, article_ids):
         """↻ on a waiting card: abandon whatever is in flight, forget recent
         failures, re-probe the AI servers, and resubmit these stories now."""
         with self._work:
@@ -112,7 +113,7 @@ class Api:
             self._bodies = {i: f for i, f in self._bodies.items() if not f.done()}
         self._forget_failures()
         ai.retry_now()
-        return self.request_summaries(article_ids, seq)
+        return self.request_summaries(article_ids)
 
     def _forget_failures(self):
         """Stories and ticker lines that failed a moment ago may go again now."""
@@ -132,9 +133,7 @@ class Api:
         states = {}
         for i in ids:
             left, why = self._retry_wait(i, now)
-            if i in self._done:
-                states[i] = {"state": "done"}   # the UI has yet to pick it up
-            elif i == self._working:
+            if i == self._working:
                 states[i] = {"state": "working"}
             elif left > 0:
                 states[i] = {"state": "failed", "error": why}
@@ -182,7 +181,6 @@ class Api:
                     self._failed.pop(article_id, None)
                     if article_id in self._wanted:
                         self._wanted.remove(article_id)
-                        self._done.add(article_id)
                 elif error and gen == self._retry_gen:
                     again = self._failed.get(article_id)
                     if site_retry_at:   # its site is down: back when it may be asked again
