@@ -86,7 +86,11 @@ class Api:
             ids = [i for i in asked if i not in states]
             new = [i for i in ids if i not in self._wanted]
             self._wanted = ids
-            for i in [i for i in self._failed if i not in ids]:
+            # a story scrolled past keeps its retry delay for a while, so
+            # scrolling back doesn't start its backoff over
+            now = time.time()
+            for i in [i for i, f in self._failed.items()
+                      if i not in ids and now - f[0] > SUMMARY_RETRY_MAX_SECONDS]:
                 del self._failed[i]
             # scrolled past: forget its fetch, and unqueue one that hasn't begun
             for i in [i for i, f in self._bodies.items()

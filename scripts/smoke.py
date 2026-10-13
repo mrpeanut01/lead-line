@@ -87,7 +87,7 @@ except ValueError:
 # story that no longer exists is reported, not queued
 article = queue[0]
 summary = ai._parse_summary(good)
-ingest.ensure_body = lambda article_id: None
+ingest.ensure_body = lambda article_id, for_reader=True: None
 ai.note_demand = lambda: None
 ai.summarize_article = lambda article_id, epoch=None: store.save_summary(
     article_id, summary, "ollama", "smoke")

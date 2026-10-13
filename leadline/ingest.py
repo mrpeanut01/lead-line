@@ -204,8 +204,9 @@ def _html_text(resp):
 #
 # ensure_body() is the one way in. A site that is down or busy is not a
 # paywall: nothing is saved and SiteDown says when to ask again. After
-# FETCH_ATTEMPTS the story falls back to the feed's description, so a dead site
-# can't hold a story (or the extraction pass) up for good.
+# FETCH_ATTEMPTS for the reader, the story falls back to the feed's description
+# so a dead site can't hold its summary up for good. The background pass only
+# pre-fetches: it neither uses up attempts nor falls back.
 
 FETCH_ATTEMPTS = 3
 FETCH_RETRY_SECONDS = 20   # before asking a page that was just down or busy again
@@ -214,22 +215,23 @@ _fetch_guard = threading.Lock()
 _fetch_locks = {}      # article id -> its fetch lock, kept for the session so every caller shares it
 
 
-def ensure_body(article_id):
+def ensure_body(article_id, for_reader=True):
     """The story's row with its text fetched if it wasn't there (body_text is
     None: never extracted, or TTL-purged; '' means extraction found nothing, so
     it isn't refetched). None if the story is gone. Raises SiteDown while its
-    site is down and tries remain. Callers that overlap share one fetch."""
+    site is down and tries remain (always, when not for_reader). Callers that
+    overlap share one fetch."""
     with _fetch_guard:
         lock = _fetch_locks.setdefault(article_id, threading.Lock())
     with lock:
         article = store.get_article(article_id)
         if article and article["body_text"] is None:
-            _extract(article)
+            _extract(article, for_reader)
             article = store.get_article(article_id)
         return article
 
 
-def _extract(article):
+def _extract(article, for_reader):
     """Fetch + extract body; detect paywall by word count (spec §5.2)."""
     failures, retry_at = _fetch_failures.get(article["id"], (0, 0))
     if time.time() < retry_at:
@@ -245,6 +247,9 @@ def _extract(article):
         down = SiteDown(time.time() + FETCH_RETRY_SECONDS)
     except SiteDown as e:
         down = e
+    if down and not for_reader:
+        _fetch_failures[article["id"]] = (failures, down.retry_at)
+        raise down
     if down and failures + 1 < FETCH_ATTEMPTS:
         _fetch_failures[article["id"]] = (failures + 1, down.retry_at)
         raise down
@@ -270,7 +275,7 @@ def extract_pending():
     articles = store.articles_needing_extraction()
     for a in articles:
         try:
-            ensure_body(a["id"])
+            ensure_body(a["id"], for_reader=False)
         except SiteDown:
-            pass   # asked again on a later pass
+            pass   # asked again on a later pass, or when the reader gets to it
     return len(articles)
