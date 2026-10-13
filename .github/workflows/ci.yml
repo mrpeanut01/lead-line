@@ -1,0 +1,70 @@
+name: CI
+
+# Every pull request and every push to main: lint, a dependency audit, and the
+# app's own self-test (LEADLINE_SELFTEST=1) in a real window on macOS.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Ruff (rules in ruff.toml)
+        run: |
+          pip install ruff
+          ruff check .
+      - name: Python compiles
+        run: python -m compileall -q leadline scripts run_leadline.py
+      - name: UI script parses
+        run: |
+          python - <<'EOF'
+          import re
+          html = open("leadline/ui/index.html", encoding="utf-8").read()
+          open("ui.js", "w", encoding="utf-8").write(
+              "\n".join(re.findall(r"<script>(.*?)</script>", html, re.S)))
+          EOF
+          node --check ui.js
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Known vulnerabilities in dependencies
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt
+
+  selftest:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Self-test (stack renders, ticker round trip, no script errors)
+        run: |
+          export LEADLINE_DATA_DIR="$RUNNER_TEMP/leadline-selftest"
+          LEADLINE_SELFTEST=1 python -m leadline > selftest.log 2>&1 &
+          APP_PID=$!
+          for _ in $(seq 120); do kill -0 "$APP_PID" 2>/dev/null || break; sleep 1; done
+          kill "$APP_PID" 2>/dev/null || true
+          cat selftest.log
+          grep -q 'SELFTEST cards=[0-9]* ticker=ok errors=\[\]' selftest.log

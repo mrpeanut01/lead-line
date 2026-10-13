@@ -17,6 +17,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Tag matches __version__ (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' leadline/__init__.py)
+          [ "v$version" = "$GITHUB_REF_NAME" ] \
+            || { echo "tag $GITHUB_REF_NAME does not match __version__ $version"; exit 1; }
       - name: Ensure release exists (tags only)
         if: startsWith(github.ref, 'refs/tags/')
         env:
