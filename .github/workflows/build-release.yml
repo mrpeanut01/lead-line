@@ -16,7 +16,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Tag matches __version__ (tags only)
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -35,9 +35,9 @@ jobs:
     runs-on: windows-latest
     needs: release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -66,7 +66,7 @@ jobs:
           if (-not (Test-Path "$env:LEADLINE_DATA_DIR\leadline.db")) { throw "no database created" }
           Stop-Process -Id $p.Id -Force
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: LeadLine-windows
           path: dist/LeadLine-*-windows.zip
@@ -82,9 +82,9 @@ jobs:
     runs-on: macos-latest
     needs: release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -115,7 +115,7 @@ jobs:
           test -L "$MNT/Applications"
           hdiutil detach "$MNT"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: LeadLine-macos
           path: |
