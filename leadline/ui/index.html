@@ -126,6 +126,17 @@
   }
   .read-full:hover { background: var(--color-surface); }
 
+  /* Share sits beside Read full article once a story is summarized */
+  .card-actions { display: flex; gap: 10px; }
+  .card-actions .read-full { flex: 1; width: auto; }
+  .share-btn {
+    display: flex; align-items: center; justify-content: center; gap: 7px; flex: none;
+    font-family: var(--font-body); font-size: 14px; font-weight: 600;
+    color: var(--color-text-muted); background: none; cursor: pointer;
+    border: 1px solid var(--color-divider); border-radius: 8px; padding: 12px 18px;
+  }
+  .share-btn:hover { background: var(--color-surface); }
+
   .swipe-hint {
     text-align: center; font-size: 12px; color: var(--color-text-faint);
     padding-top: 14px; transition: opacity 1s;
@@ -587,9 +598,12 @@ function buildCard(a, index) {
     footer.appendChild(el("div", "orig-footer",
       `<span class="orig-label">Original headline</span> &nbsp;&ldquo;${esc(a.original_headline)}&rdquo;`));
   }
+  const actions = el("div", "card-actions");
   const readBtn = el("button", "read-full", "Read full article");
   readBtn.onclick = () => expandCard(card, a, readBtn);
-  footer.appendChild(readBtn);
+  actions.appendChild(readBtn);
+  if (a.processed) actions.appendChild(shareButton(a));
+  footer.appendChild(actions);
 
   const expand = el("div", "body-expand");
   footer.appendChild(expand);
@@ -618,21 +632,52 @@ async function expandCard(card, a, btn) {
 
   const actions = el("div", "expand-actions");
   const collapse = el("button", "", "Collapse &#9652;");
+  const row = btn.closest(".card-actions");
   collapse.onclick = () => {
     card.classList.remove("expanded");
     card.scrollTop = 0;
-    btn.style.display = "";
+    row.style.display = "";
   };
   const src = el("a", "", "Source &#8599;");
   src.href = "#";
   src.onclick = (e) => { e.preventDefault(); api().open_source(a.canonical_url); };
   actions.appendChild(collapse);
   actions.appendChild(src);
+  if (a.processed) actions.appendChild(shareButton(a));
   expand.appendChild(actions);
 
   btn.disabled = false; btn.textContent = "Read full article";
-  btn.style.display = "none";
+  row.style.display = "none";
   card.classList.add("expanded");
+}
+
+/* Share: the backend copies the story as a message ready to paste into
+   Messages (or anywhere); if it can't reach the system clipboard, the page
+   tries its own */
+const SHARE_ICON = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"
+  stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M8 10V1.5M5 4.5l3-3 3 3M5.5 6.5h-2v8h9v-8h-2"/></svg>`;
+
+function shareButton(a) {
+  const btn = el("button", "share-btn", `${SHARE_ICON}<span>Share</span>`);
+  btn.title = "Copy the summary, original headline and link to paste into Messages";
+  btn.onclick = () => shareStory(a, btn);
+  return btn;
+}
+
+async function shareStory(a, btn) {
+  let res;
+  try { res = await api().share_story(a.id); }
+  catch (e) { res = { ok: false, error: "Couldn't copy: " + e }; }
+  let ok = res.ok;
+  if (!ok && res.text && navigator.clipboard) {
+    try { await navigator.clipboard.writeText(res.text); ok = true; } catch (e) { /* reported below */ }
+  }
+  if (!ok) { toast(res.error || "Couldn't reach the clipboard"); return; }
+  toast("Copied. Ready to paste.");
+  const label = btn.querySelector("span");
+  label.textContent = "Copied ✓";
+  setTimeout(() => { label.textContent = "Share"; }, 2000);
 }
 
 /* summarize on demand: only the story on screen plus the read-ahead window,
