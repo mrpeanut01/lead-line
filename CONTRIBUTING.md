@@ -27,6 +27,7 @@ leadline/
   ingest.py    RSS poll (conditional GET) → dedup hash → extraction (stdlib HTMLParser)
   ai.py        prompt + router: primary/secondary servers (Ollama, Anthropic),
                Ollama model warm-up monitor + status
+  share.py     Share button: the story as plain text for iMessage, onto the clipboard
   api.py       pywebview JS bridge — every UI capability is a method here
   app.py       entry point: background pipeline thread + window
   ui/index.html  the whole UI: vertical snap-scroll card stack, settings overlay

@@ -145,4 +145,19 @@ for _ in range(50):
 assert state["state"] == "done" and state["card"]["straight_headline"] == "H", state
 assert bridge.request_summaries([])["states"] == {}
 
+# share: plain text, the link alone on the last line (Messages previews a
+# trailing link); stray newlines folded; the clipboard itself is stubbed
+from leadline import share  # noqa: E402
+
+copied = []
+share.copy_to_clipboard = lambda text: copied.append(text) or True
+res = bridge.share_story(article["id"])
+assert res["ok"] and copied == [res["text"]], res
+assert res["text"] == ("H\n\n• a\n• b\n• c\n\n"
+                       "Original headline (Smoke): “T”\nhttp://smoke.test/a?id=1"), res["text"]
+assert share.share_text({"processed": 0, "straight_headline": None, "original_headline": "Old\nnews",
+                         "source_name": "", "canonical_url": "http://x/1"}) == (
+    "Original headline: “Old news”\nhttp://x/1")
+assert bridge.share_story("missing")["ok"] is False
+
 print("smoke ok")
