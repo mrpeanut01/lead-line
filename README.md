@@ -203,6 +203,27 @@ Customize it under **⚙ → Ticker**: number of stories, fade and removal times
 scroll speed, text size, color scheme (Paper, Night, Amber terminal, Green terminal), and
 always-on-top.
 
+## Sharing a story
+
+**Share** on a summarized card (and beside **Source ↗** when the article is open) copies the
+story to your clipboard as plain text, ready to paste into Messages, Mail, Slack or anything
+else:
+
+```text
+Fed holds rates at 4.25% and signals two cuts before year end
+
+• The Federal Reserve left its benchmark rate unchanged on Wednesday.
+• Officials projected two quarter-point cuts by December.
+• Chair Powell cited cooling inflation but a still-tight labor market.
+
+Original headline (NPR): “The Fed just made a move that could change everything for your wallet”
+https://www.npr.org/2026/10/20/fed-rates
+```
+
+The layout is built for iMessage. It is plain text, because Messages shows Markdown as literal
+asterisks, and the link sits alone on the last line, so Messages sends it as its own bubble
+with a preview card. Slack and most other chat apps unfurl a trailing link the same way.
+
 ## Configuration (environment variables)
 
 | Variable | Default |
@@ -230,6 +251,7 @@ always-on-top.
 | Scroll / swipe up, `↓` `j` space | Next story (marks the passed story read) |
 | Scroll / swipe down, `↑` `k` | Previous story |
 | Read full article | Expand body inline |
+| Share | Copy the summary, original headline and link, ready to paste (see above) |
 | ▬ or `t` | Minimize to the ticker view (see above) |
 | `Esc`, ⤢, or double-click the strip | Leave the ticker view |
 | ⟳ (or **Check for new stories** on the last card) | Poll feeds now and jump back to the top if anything is new; a toast says when nothing is |

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import requests
 
-from . import ai, config, ingest, store, stories
+from . import ai, config, ingest, share, store, stories
 
 if getattr(sys, "frozen", False):  # PyInstaller bundle
     _UI_DIR = Path(sys._MEIPASS) / "leadline" / "ui"
@@ -68,6 +68,16 @@ class Api:
         """Which of these cards no longer stand on their own: id -> 'no_news'
         (nothing to report in it) or 'merged' (now part of another story)."""
         return store.hidden_reasons(list(dict.fromkeys(article_ids)))
+
+    def share_story(self, article_id):
+        """Share on a card: copy the story as a message to paste into
+        iMessage or anywhere else. The text comes back too, so the page can
+        try its own clipboard if the system's couldn't be reached."""
+        card = store.get_card(article_id)
+        if not card:
+            return {"ok": False, "text": "", "error": "That story is no longer available"}
+        text = share.share_text(card)
+        return {"ok": share.copy_to_clipboard(text), "text": text}
 
     def mark_read(self, article_id):
         store.mark_read(article_id)
