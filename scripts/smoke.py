@@ -396,8 +396,11 @@ def stub_route(prompt, schema, parse):      # the summary
 
 ai._route, ai.call_ollama = stub_route, stub_ollama
 real_ensure = ingest.ensure_body
-ingest.ensure_body = lambda article_id, for_reader=True: store.get_article(article_id)
+fetched = []
+ingest.ensure_body = lambda article_id, for_reader=True: (
+    fetched.append(article_id) or store.get_article(article_id))
 ai.summarize_article(lead["id"], keep=[])
+assert other["id"] in fetched   # the folded report's article is fetched for the summary
 ai._route, ai.call_ollama, ingest.ensure_body = real_route, real_ollama, real_ensure
 ai.ollama_ready = real_ready
 assert "Hands on with Claude Duet" in asked[0] and "REPORT 2" in asked[1], asked

@@ -111,7 +111,8 @@ summary covers every report of it (see [One card per story](#one-card-per-story)
 things send more than that, and only to your Ollama server, never Claude: the ticker's
 one-line headlines, and the same-story check, which sends the headlines and feed
 descriptions (no article text) of up to six unread stories near the one being summarized,
-even ones beyond the read-ahead window.
+even ones beyond the read-ahead window. A story it finds to be the same one joins the card
+you are reading, and is summarized with it.
 
 Summaries stick to the article. The model is told when the article was published and
 today's date, and must not add a year, age or figure from its own memory. A model left to
@@ -166,9 +167,11 @@ LeadLine shows each story once.
   at the same moment — are put to your Ollama model as one short question: which of these
   are the same news event or the same specific product? A shared company, person or topic
   isn't enough, and roundups, podcasts and deals posts never count. The ones it confirms
-  join the story. Like the ticker, this is Ollama only: those stories' headlines and feed
-  descriptions never go to Claude, and while Ollama is off or still loading, the check is
-  skipped and they stay cards of their own.
+  join the story. Like the ticker, the question goes to Ollama only, never Claude, and while
+  Ollama is off or still loading it is skipped and those stories stay cards of their own. A
+  story it confirms becomes one of the card's reports: from then on its text goes into the
+  card's combined summary like any other report's, to whichever server writes summaries
+  (Claude too, when it is covering for Ollama).
 - **One combined summary.** The card's summary is written from up to four of the story's
   reports, what they agree on first and then what only some of them add. The source bar shows
   **+N more reports**, and **N reports on this story** under the bullets lists them all,

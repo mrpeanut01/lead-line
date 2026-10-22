@@ -20,6 +20,7 @@ import json
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 
 import requests
@@ -994,16 +995,37 @@ def body_to_summarize(article_id):
     return ingest.ensure_body(article_id)
 
 
+def _fetch_quietly(article_id):
+    try:
+        ingest.ensure_body(article_id, for_reader=False)
+    except ingest.SiteDown:
+        pass   # its feed description stands in
+
+
 def fetch_member_texts(article_id):
     """Fetch the text of the story's other reports, as far as their sites
     allow, for its combined summary. Nothing waits on this: a report whose
     text isn't in yet is summarized from its feed description."""
     for other in stories.summary_members(article_id):
         if other["body_text"] is None:
-            try:
-                ingest.ensure_body(other["id"], for_reader=False)
-            except ingest.SiteDown:
-                pass
+            _fetch_quietly(other["id"])
+
+
+_member_fetch = ThreadPoolExecutor(max_workers=3, thread_name_prefix="member")
+FOLDED_TEXT_WAIT_SECONDS = 8   # how long a summary waits for reports the AI just folded in
+
+
+def _await_member_texts(article_id):
+    """Fetch the text of the story's reports that have none yet (the ones just
+    folded in: nothing has asked for theirs), in parallel and off this thread,
+    and wait a few seconds at most. The summary goes ahead with whatever has
+    arrived; the rest is kept for next time. Cancelled is raised."""
+    pending = [_member_fetch.submit(_fetch_quietly, m["id"])
+               for m in stories.summary_members(article_id) if m["body_text"] is None]
+    deadline = time.time() + FOLDED_TEXT_WAIT_SECONDS
+    while pending and time.time() < deadline:
+        _check_cancelled()
+        pending = list(wait(pending, timeout=1).not_done)
 
 _grouped = set()   # stories already asked about this session: a retry doesn't ask again
 
@@ -1030,7 +1052,11 @@ def fold_related(article, keep=()):
             print(f"[stories] same-story check failed: {e}")
             return   # asked again if this story's summary has to be retried
         _check_cancelled()   # the reader moved on while it was asked: ask again later
-        stories.fold(article["id"], [candidates[n - 1]["id"] for n in same])
+        folded = stories.fold(article["id"], [candidates[n - 1]["id"] for n in same])
+        _grouped.add(article["id"])   # asked: not again, even if the wait below is cut short
+        if folded:   # summarized from their articles, not their feed blurbs
+            _await_member_texts(article["id"])
+        return
     _grouped.add(article["id"])
 
 

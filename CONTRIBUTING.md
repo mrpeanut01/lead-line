@@ -44,8 +44,10 @@ Design rules worth knowing before you patch:
 - **One exception to the read-ahead boundary: the same-story check.** When a story in the
   window is summarized, `ai.fold_related` sends the headlines and feed descriptions (no
   article text) of up to six nearby unread stories, which may be outside the window, to
-  Ollama only, to ask which are the same story. Nothing else crosses the boundary; don't
-  widen it without a maintainer decision.
+  Ollama only, to ask which are the same story. A story it confirms joins the story being
+  read, so its text then goes into that card's combined summary, to whichever server writes
+  summaries (Claude included). Nothing else crosses the boundary; don't widen it without a
+  maintainer decision.
 - **Bodies are transient.** Extracted article text is TTL-purged (default 24 h); only
   summaries and headlines persist. Don't add long-term full-text storage.
 - **Respect publishers.** robots.txt stays on; attribution stays prominent.
