@@ -67,6 +67,20 @@
     margin-bottom: 28px;
   }
   .source-bar .source-name { font-weight: 600; }
+  .source-bar .also { font-weight: 400; color: var(--color-text-faint); }
+
+  /* the other reports a story's card stands for (it reads them all) */
+  .related { font-size: 13px; color: var(--color-text-muted); padding-bottom: 14px; }
+  .related summary { cursor: pointer; font-weight: 600; list-style: none; }
+  .related summary::-webkit-details-marker { display: none; }
+  .related summary::before { content: "\25B8\00a0"; color: var(--color-text-faint); }
+  .related[open] summary::before { content: "\25BE\00a0"; }
+  .related ul { list-style: none; margin-top: 8px; max-height: 28vh; overflow-y: auto; }
+  .related li { padding: 7px 0; border-top: 1px solid var(--color-divider);
+                line-height: 1.45; cursor: pointer; }
+  .related li:hover .rel-title { color: var(--color-text); text-decoration: underline; }
+  .related .rel-src { font-weight: 600; }
+  .related .rel-age { color: var(--color-text-faint); white-space: nowrap; }
 
   .headline {
     font-family: var(--font-display);
@@ -553,8 +567,10 @@ function buildCard(a, index) {
   const inner = el("div", "card-inner");
 
   const topic = a.topic_tags && a.topic_tags.length ? esc(a.topic_tags[0]) + " &nbsp;·&nbsp; " : "";
+  const also = a.related && a.related.length
+    ? ` <span class="also">+${a.related.length} more ${a.related.length === 1 ? "report" : "reports"}</span>` : "";
   inner.appendChild(el("div", "source-bar",
-    `<span class="source-name">${esc(a.source_name || "Unknown source")}</span>
+    `<span><span class="source-name">${esc(a.source_name || "Unknown source")}</span>${also}</span>
      <span>${topic}${timeAgo(a.pub_date)}</span>`));
 
   if (a.is_paywalled) inner.appendChild(el("span", "paywall-tag", "PAYWALLED"));
@@ -583,6 +599,7 @@ function buildCard(a, index) {
   }
 
   const footer = el("div", "card-footer");
+  if (a.related && a.related.length) footer.appendChild(buildRelated(a));
   if (a.processed) {
     footer.appendChild(el("div", "orig-footer",
       `<span class="orig-label">Original headline</span> &nbsp;&ldquo;${esc(a.original_headline)}&rdquo;`));
@@ -600,6 +617,28 @@ function buildCard(a, index) {
   inner.appendChild(footer);
   card.appendChild(inner);
   return card;
+}
+
+/* a story reported more than once is one card; the other reports are listed
+   under it, each opening at its source */
+function buildRelated(a) {
+  const box = el("details", "related");
+  const sources = [...new Set([a.source_name, ...a.related.map(r => r.source_name)].filter(Boolean))];
+  const named = sources.slice(0, 3).join(", ") + (sources.length > 3 ? ` +${sources.length - 3}` : "");
+  box.appendChild(el("summary", "",
+    `${a.related.length + 1} reports on this story &nbsp;·&nbsp; ${esc(named)}`));
+  const ul = el("ul");
+  for (const r of a.related) {
+    const li = el("li", "",
+      `<span class="rel-src">${esc(r.source_name || "")}</span> &nbsp;<span class="rel-title">`
+      + `${esc(r.straight_headline || r.original_headline)}</span> &nbsp;`
+      + `<span class="rel-age">${timeAgo(r.pub_date)}</span>`);
+    li.title = "Open at the source";
+    li.onclick = () => api().open_source(r.canonical_url);
+    ul.appendChild(li);
+  }
+  box.appendChild(ul);
+  return box;
 }
 
 async function expandCard(card, a, btn) {
@@ -641,10 +680,21 @@ async function expandCard(card, a, btn) {
 let overlayCard = null;     // story opened from the ticker, shown over the stack
 let summaryStates = {};     // article id -> {state, error | card} from the backend
 
+/* the cards in view: no other story's summary may fold them into itself */
+function onScreenIds() {
+  if (tickerOn) return [];
+  const ids = [];
+  if (overlayCard) ids.push(overlayCard.id);
+  if (cards[currentIndex]) ids.push(cards[currentIndex].id);
+  return ids;
+}
+
 function wantedIds() {
   if (tickerOn) return [];
   const ids = [];
-  const want = c => { if (c && !c.processed && !c._gone && !ids.includes(c.id)) ids.push(c.id); };
+  const want = c => {
+    if (c && !c.processed && !c._gone && !c._hidden && !ids.includes(c.id)) ids.push(c.id);
+  };
   want(overlayCard);
   cards.slice(currentIndex, currentIndex + readAhead + 1).forEach(want);
   return ids;
@@ -663,8 +713,8 @@ async function ensureSummaries() {
       summaryRetry = false;
       let res;
       try {
-        res = await (retry ? api().retry_summaries(wantedIds())
-                           : api().request_summaries(wantedIds()));
+        res = await (retry ? api().retry_summaries(wantedIds(), onScreenIds())
+                           : api().request_summaries(wantedIds(), onScreenIds()));
       } catch (e) {
         if (retry) toast("Couldn't resubmit: " + e);
         break;
@@ -681,9 +731,38 @@ function showSummaryStates(states) {
     if (s.state === "done") showSummary(s.card);
     else if (s.state === "gone") {
       for (const c of [overlayCard, ...cards]) if (c && c.id === id) c._gone = true;
-    }
+    } else if (s.state === "hidden") dropStory(id, s.reason);
   }
   document.querySelectorAll(".card[data-id]").forEach(paintPending);
+}
+
+/* a story found to have no news, or folded into another story's card, leaves
+   the stack. Only cards from the one on screen down: one the reader has
+   passed stays put, so the stack doesn't jump. One the reader has open goes
+   on a later pass. */
+let hiddenReasons = {};   // article id -> why its card left (or is leaving) the stack
+function dropStory(id, reason) {
+  const why = reason === "no_news" ? "Skipped a story with no news in it"
+                                   : "Combined with a related story";
+  if (overlayCard && overlayCard.id === id) {
+    hiddenReasons[id] = reason;
+    overlayCard._hidden = true;
+    const shown = document.querySelector("#story-overlay .card");
+    if (shown && !cardInUse(shown)) { closeOverlay(); toast(why); }
+  }
+  const idx = cards.findIndex(c => c.id === id);
+  if (idx < 0 || idx < currentIndex) return;
+  hiddenReasons[id] = reason;
+  cards[idx]._hidden = true;
+  const cardEl = document.querySelector(`#stack .card[data-index="${idx}"]`);
+  if (cardEl && cardInUse(cardEl)) return;
+  cards.splice(idx, 1);
+  if (cardEl) { observer.unobserve(cardEl); cardEl.remove(); }
+  document.querySelectorAll("#stack .card:not(.end-card)").forEach((c, i) => { c.dataset.index = i; });
+  if (idx < maxSeenIndex) maxSeenIndex--;
+  if (idx === currentIndex) toast(why);
+  updateProgress(currentIndex);
+  updateEndCard();
 }
 
 /* don't yank a card the reader has open (or is opening); it is swapped later */
@@ -720,11 +799,15 @@ async function retrySummaries() {
 function paintPending(card) {
   const text = card.querySelector(".pending-text");
   if (!text) return;
-  const s = summaryStates[card.dataset.id];
+  const hiddenAs = hiddenReasons[card.dataset.id];
+  const s = hiddenAs ? { state: "hidden", reason: hiddenAs } : summaryStates[card.dataset.id];
   const [dot, msg] =
     !s ? ["", "AI summary not requested yet"]
     : s.state === "done" ? ["", "Summary ready…"]
     : s.state === "gone" ? ["", "This story is no longer available"]
+    : s.state === "hidden" ? ["", s.reason === "no_news"
+        ? "No news in this one: it leaves the stack when you close it"
+        : "Combined with a related story: it leaves the stack when you close it"]
     : s.state === "working" ? ["loading", "Summarizing now…"]
     : s.state === "failed" ? ["error", `Summary failed (${s.error || "unknown error"}). Trying again shortly.`]
     : ["checking", "Waiting for its turn with the AI…"];
@@ -818,7 +901,7 @@ async function showBacklog() {
   const stack = document.getElementById("stack");
   const endEl = stack.querySelector(".end-card");
   for (const a of res.items) {
-    if (cards.some(c => c.id === a.id)) continue;
+    if (cards.some(c => c.id === a.id) || hiddenReasons[a.id]) continue;
     backlogIds.add(a.id);
     const c = buildCard(a, cards.length);
     cards.push(a);
@@ -840,6 +923,7 @@ function renderStack(list) {
   stack.scrollTop = 0;
   stackGen++;
   cards = list;
+  hiddenReasons = {};   // the list is the backend's word on what is offered
   renderedIds = new Set(list.map(a => a.id));
   maxSeenIndex = 0;
   currentIndex = 0;
@@ -875,6 +959,17 @@ async function refreshStack() {
     renderStack(latest);
     return;
   }
+  // stories folded into another story's card, or found to have no news,
+  // since the stack was built. A story that left and is offered again (it
+  // leads its story now) is checked too: `latest` may be from before it left
+  const ahead = cards.slice(currentIndex).filter(c => !c._read).map(c => c.id);
+  const back = latest.filter(a => hiddenReasons[a.id] && !cards.some(c => c.id === a.id))
+                     .map(a => a.id);
+  const check = [...ahead, ...back];
+  const hidden = check.length ? await api().hidden_cards(check) : {};
+  if (gen !== stackGen) return;
+  for (const [id, reason] of Object.entries(hidden)) dropStory(id, reason);
+  for (const id of back) if (!hidden[id]) delete hiddenReasons[id];
   const byId = Object.fromEntries(latest.map(a => [a.id, a]));
   // stories summarized after they left the wanted window (the ones in it get
   // their card from request_summaries)
@@ -889,7 +984,8 @@ async function refreshStack() {
   const have = new Set(cards.map(c => c.id));
   const stack = document.getElementById("stack");
   const endEl = stack.querySelector(".end-card");
-  for (const a of latest.filter(a => !have.has(a.id))) {
+  // (a story hidden since `latest` was read isn't put back)
+  for (const a of latest.filter(a => !have.has(a.id) && !hiddenReasons[a.id])) {
     const c = buildCard(a, cards.length);
     cards.push(a);
     stack.insertBefore(c, endEl);
@@ -956,6 +1052,7 @@ async function renderStatus() {
     .map(([p, n]) => `${p}: ${n}`).join(" &nbsp;·&nbsp; ") || "none yet";
   document.getElementById("status-line").innerHTML =
     `${s.unread} unread (${s.processed_unread} summarized) &nbsp;·&nbsp; ${s.total} total<br>
+     ${s.grouped} reports combined into other stories' cards &nbsp;·&nbsp; ${s.no_news} skipped as no news<br>
      Summaries by provider — ${prov}`;
 }
 

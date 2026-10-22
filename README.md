@@ -7,7 +7,9 @@ Every story is shown one at a time in a full-window **vertical snap-scroll stack
 AI-rewritten straight headline plus 3–5 Bottom-Line-Up-Front bullets, always above the fold.
 Scroll down for the next story. Tap **Read full article** to expand the extracted body inline;
 **Source ↗** opens the publisher in your browser. The publisher's original headline stays
-visible (subordinate, in the card footer) for transparency.
+visible (subordinate, in the card footer) for transparency. A story reported several times —
+by several outlets, or as a review plus its photo galleries — is **one card** with one
+combined summary, and articles with no news in them are skipped.
 
 Privacy-first by design: everything runs locally in a single process. No accounts, no
 telemetry, no cloud backend — article text goes only to the AI server *you* configure
@@ -42,7 +44,7 @@ Single-process Python desktop app in a native macOS window (pywebview / WKWebVie
 
 | Spec layer | Implementation |
 |---|---|
-| Ingestion | RSS polling with conditional GET (ETag / Last-Modified), URL normalization, SHA-256 dedup, `INSERT OR IGNORE` |
+| Ingestion | RSS polling with conditional GET (ETag / Last-Modified), URL normalization, SHA-256 dedup, `INSERT OR IGNORE`; each new article joins the story it reports (rarity-weighted headline similarity, see [One card per story](#one-card-per-story)) |
 | Extraction | Dependency-free paragraph harvester + `og:image`; robots.txt respected (a robots.txt that can't be read means the page isn't fetched); paywall detection by word count; a site that is down is retried before falling back to the feed's description |
 | AI processing | Ollama first (structured JSON output, model warmed into memory at launch), Anthropic Claude Haiku fallback — or cover while the model loads — with a hard daily cap; provider logged per article |
 | Storage | SQLite in `~/Library/Application Support/LeadLine/` (Postgres stand-in); body text TTL-purged after 24 h (Redis stand-in) |
@@ -104,7 +106,14 @@ immediately; environment variables below act as defaults only.
 
 Stories are summarized **on demand only** — the story on screen plus the **Read ahead**
 window (0–10, default 1). Nothing is sent to a model before you're about to read it, and a
-story you scroll past stops being summarized so the one on screen goes next.
+story you scroll past stops being summarized so the one on screen goes next. A story's
+summary covers every report of it (see [One card per story](#one-card-per-story)).
+
+Summaries stick to the article. The model is told when the article was published and
+today's date, and must not add a year, age or figure from its own memory. A model left to
+guess assumes the year its training ended in, so a 2026 story would come back as "the 2024
+season". A summary that still states a year or age the article never mentions is asked
+for once more with a correction, and any bullets still stating it are dropped.
 
 A card that is still waiting shows where its summary stands — waiting its turn, summarizing
 now, or failed (with the reason) — under the original headline. A failed story is retried
@@ -135,6 +144,37 @@ settings):
 | amber | loaded, but the last summary failed | — |
 | red | server unreachable, or model not installed | no API key, or the last request failed |
 | grey | off | off |
+
+## One card per story
+
+Feeds repeat themselves: three outlets report the same court ruling, and a car site posts a
+review with an interior gallery, an exterior gallery and a spec page for the same car.
+LeadLine shows each story once.
+
+- **Grouped as it arrives.** Each new article is compared with the last two days of
+  headlines. Words count by how rare they are, so a shared model name or place weighs far
+  more than a shared "Apple" or "Trump". A close match joins that story. This happens at
+  poll time, without a model.
+- **Closer calls go to the AI.** Just before a story is summarized, unread stories that come
+  close to it — similar headlines, a shared name like "iPhone Duo", or the same site posting
+  at the same moment — are put to the AI as one short question: which of these are the same
+  news event or the same specific product? A shared company, person or topic isn't enough,
+  and roundups, podcasts and deals posts never count. The ones it confirms join the story.
+  This sends those stories' headlines and feed descriptions to the AI server.
+- **One combined summary.** The card's summary is written from up to four of the story's
+  reports, what they agree on first and then what only some of them add. The source bar shows
+  **+N more reports**, and **N reports on this story** under the bullets lists them all,
+  each opening at its source.
+- **Read once.** Scrolling past the card reads every report of it, and a report of the same
+  story that arrives later comes in already read.
+- **No news, no card.** When the AI finds nothing to report — a podcast episode listing, a
+  sponsor message, a quiz, a lone quote — the story is skipped and its card leaves the stack
+  (a short note says so if it was the one on screen). If it led a story, the next best report
+  leads it instead.
+
+The first launch after updating hides old summaries that already said there was no news and
+groups the last week's stories, once. Settings shows how many reports were combined and
+how many were skipped.
 
 ## Ticker view
 

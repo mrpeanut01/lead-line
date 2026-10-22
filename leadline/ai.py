@@ -11,15 +11,20 @@ is in memory: summaries wait for the load instead of timing out, or — with
 Claude's "primary_during_load" role — go to Claude until Ollama is ready.
 If another model is already in memory at launch, the reader is asked whether
 to use it for the session rather than wait for the configured one to load.
+
+A story reported more than once gets one summary combined from its reports
+(see stories.py), after the AI is asked which nearby unread stories are the
+same story. A story the AI finds no news in is hidden instead of summarized.
 """
 import json
 import re
 import threading
 import time
+from datetime import datetime, timezone
 
 import requests
 
-from . import config, ingest, store
+from . import config, ingest, store, stories
 
 SUMMARY_SCHEMA = {
     "type": "object",
@@ -30,19 +35,15 @@ SUMMARY_SCHEMA = {
         "one_sentence": {"type": "string"},
         "topic_tags": {"type": "array", "items": {"type": "string"}, "maxItems": 4},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "no_news": {"type": "boolean"},
     },
     "required": ["straight_headline", "bluf_bullets", "one_sentence",
-                 "topic_tags", "confidence"],
+                 "topic_tags", "confidence", "no_news"],
 }
 
-PROMPT_TEMPLATE = """You are a news editor who rewrites clickbait headlines and produces factual summaries.
-
-ARTICLE TITLE: {original_headline}
-SOURCE: {source_name}
-ARTICLE BODY:
----
-{body}
----
+_SUMMARY_FIELDS = """Use only what the text above says. This is current news, published on the date
+given. Never add a year, date, age, number, or name from your own knowledge: if the text
+says "this season" or "on Monday", say that, not a year.
 
 Return a JSON object with:
 - straight_headline: factual, declarative, <=16 words. State what happened AND the most
@@ -52,38 +53,266 @@ Return a JSON object with:
   law" but "Housing bill limiting investor purchases and easing modular-home rules becomes law".
   No teasers.
 - bluf_bullets: 3-5 bullets, each a complete sentence with the key facts. Do not repeat the
-  headline's detail verbatim; add specifics (numbers, names, dates, consequences).
+  headline's detail verbatim; add the text's specifics (numbers, names, dates, consequences).
 - one_sentence: the single most important fact in <=25 words.
 - topic_tags: up to 4 topic labels.
 - confidence: float 0-1 reflecting how well the body supports the summary.
+- no_news: true if {no_news_when} only a podcast or video listing, a sponsor message, a
+  quiz, a list of links, or a lone quote or question with no reporting. Otherwise false.
+  When true, the other fields don't matter.
 
 Return ONLY valid JSON. No preamble."""
 
+PROMPT_TEMPLATE = """You are a news editor who rewrites clickbait headlines and produces factual summaries.
 
-def build_prompt(article, source_name):
-    return PROMPT_TEMPLATE.format(
-        original_headline=article["original_headline"],
-        source_name=source_name or "Unknown",
-        body=(article.get("body_text") or "")[:4000],
-    )
+ARTICLE TITLE: {original_headline}
+SOURCE: {source_name}
+PUBLISHED: {published}
+TODAY: {today}
+ARTICLE BODY:
+---
+{body}
+---
+
+""" + _SUMMARY_FIELDS.replace("{no_news_when}", "there is no news to report: the text is")
+
+COMBINED_PROMPT_TEMPLATE = """You are a news editor who rewrites clickbait headlines and produces factual summaries.
+
+The {count} reports below cover the same story. Write ONE summary of the story as a whole:
+what the reports have in common first, then the specifics only some of them give. Never
+state the same fact twice. The headline covers the whole story, not one report's angle.
+
+TODAY: {today}
+
+{reports}
+
+""" + _SUMMARY_FIELDS.replace("{no_news_when}", "none of the reports has news to report: each is")
+
+_REPORT = """REPORT {n} ({source_name}, published {published}): {original_headline}
+---
+{body}
+---"""
+
+BODY_CHARS = 4000            # article text sent for one report
+COMBINED_BODY_CHARS = 6000   # ...shared between the reports of a combined summary
+
+
+def _text(article):
+    return (article.get("body_text") or "").strip() or (article.get("rss_description") or "").strip()
+
+
+def _day(when=None):
+    """'Monday, October 19, 2026' in local time: a model left to guess the date
+    assumes the year its training ended in."""
+    try:
+        t = datetime.fromisoformat(when) if when else datetime.now(timezone.utc)
+    except ValueError:
+        return "unknown"
+    t = (t if t.tzinfo else t.replace(tzinfo=timezone.utc)).astimezone()
+    return f"{t:%A, %B} {t.day}, {t.year}"
+
+
+def build_prompt(article, source_name, others=()):
+    """The summary prompt for a story: its lead article, plus `others` (rows
+    with source_name) reporting the same story, combined into one summary."""
+    if not others:
+        return PROMPT_TEMPLATE.format(
+            original_headline=article["original_headline"],
+            source_name=source_name or "Unknown",
+            published=_day(article.get("pub_date")), today=_day(),
+            body=(article.get("body_text") or "")[:BODY_CHARS],
+        )
+    reports = [dict(article, source_name=source_name), *others]
+    share = COMBINED_BODY_CHARS // len(reports)
+    return COMBINED_PROMPT_TEMPLATE.format(count=len(reports), today=_day(), reports="\n\n".join(
+        _REPORT.format(n=n, source_name=r.get("source_name") or "Unknown",
+                       published=_day(r.get("pub_date")),
+                       original_headline=r["original_headline"],
+                       body=_text(r)[:share] or "(no text)")
+        for n, r in enumerate(reports, 1)))
+
+
+# A model that finds nothing to summarize sometimes says so in the headline
+# instead of setting no_news ("Unable to summarize: article body contains only
+# a question"). Checked against every summary LeadLine had made, it matched
+# only those. It must also talk about the text itself (_META): "No details
+# released on suspect" is news.
+_NO_NEWS_HEADLINE = re.compile(
+    r"^(?:unable|cannot|can't|could ?n[o']t)\b.{0,20}\b"
+    r"(?:summari[sz]e|generate|determine|create|produce|extract|identify|write)"
+    r"|^no (?:substantive |actual |real |specific |reportable )?"
+    r"(?:news|story|article|content|information|details)\b"
+    r"|\b(?:article|story)(?: body| text| content)? (?:is |was )?"
+    r"(?:missing|empty|insufficient|unavailable|lacks?)\b"
+    r"|\b(?:insufficient|no|missing) (?:article|news|story) (?:content|text|body|information|details)\b",
+    re.I)
+
+
+_META = re.compile(r"\b(?:article|body|text|content|summar\w*|headline|provided)\b", re.I)
+
+
+def headline_says_no_news(headline, confidence):
+    return (confidence <= 0.5 and bool(_NO_NEWS_HEADLINE.search(headline or ""))
+            and bool(_META.search(headline or "")))
+
+
+def redo_invented_summaries():
+    """Unread summaries made before the date check that state a year or age
+    their article doesn't are made again when read. Only those whose text is
+    still kept can be checked. Returns how many."""
+    redo = []
+    for r in store.unread_summaries_with_text():
+        summary = {"no_news": False, "straight_headline": r["straight_headline"] or "",
+                   "one_sentence": r["one_sentence"] or "", "bluf_bullets": r["bluf_bullets"]}
+        source = " ".join([r["original_headline"] or "", r["pub_date"] or "",
+                           r["rss_description"] or "", r["body_text"] or ""])
+        if _summary_invents(summary, source):
+            redo.append(r["id"])
+    store.unsummarize(redo)
+    return len(redo)
+
+
+def hide_no_news_summaries():
+    """Hide summaries made before no_news existed whose headline says there
+    was nothing to summarize. Returns how many."""
+    found = [r["id"] for r in store.summarized_headlines()
+             if headline_says_no_news(r["straight_headline"], r["confidence_score"] or 0)]
+    for article_id in found:
+        stories.drop_no_news(article_id)
+    return len(found)
+
+
+def _truthy(value):
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "yes", "1")
+    return bool(value)
+
+
+def _clean(text):
+    """A sentence without JSON left over from a sloppy reply ('…2028.”,')."""
+    s = str(text).strip().rstrip(",").rstrip()
+    if s.endswith('"') and s.count('"') % 2:
+        s = s[:-1].rstrip()
+    if s.endswith("”") and s.count("“") < s.count("”"):
+        s = s[:-1].rstrip()
+    return s
+
+
+_YEAR = re.compile(r"\b(?:19|20)\d\d\b")
+_AGE = re.compile(r"\b(\d{1,3})[\s-]*years?[\s-]*old\b", re.I)
+
+
+def _invented(text, source):
+    """Years and ages in `text` that `source` never mentions: a model's own
+    guesses from its training days, like "the 2024 season" in a 2026 story."""
+    text = re.sub(r"[  ]", " ", re.sub(r"[‐-―]", "-", text))
+    known = set(re.findall(r"\d+", source))
+    return ({y for y in _YEAR.findall(text) if y not in known}
+            | {f"{n}-year-old" for n in _AGE.findall(text) if n not in known})
+
+
+def _summary_invents(summary, source):
+    if summary["no_news"]:
+        return set()
+    return _invented(" ".join([summary["straight_headline"], summary["one_sentence"],
+                               *summary["bluf_bullets"]]), source)
+
+
+def _without_invented(summary, source):
+    """The summary minus the bullets that state a year or age the article
+    doesn't. ValueError if the headline does, or too few bullets are left."""
+    if _invented(summary["straight_headline"], source):
+        raise ValueError("headline states a date the article doesn't")
+    bullets = [b for b in summary["bluf_bullets"] if not _invented(b, source)]
+    if len(bullets) < 3:
+        raise ValueError("summary states dates the article doesn't")
+    one = summary["one_sentence"]
+    return dict(summary, bluf_bullets=bullets,
+                one_sentence=bullets[0] if _invented(one, source) else one)
 
 
 def _parse_summary(text):
-    """Validate model output against the ArticleSummary shape (spec §6.3)."""
+    """Validate model output against the ArticleSummary shape (spec §6.3).
+    A story with no news comes back as {"no_news": True} and nothing else."""
     match = re.search(r"\{.*\}", text, re.S)
     if not match:
         raise ValueError("no JSON object in response")
     data = json.loads(match.group(0))
-    bullets = [str(b).strip() for b in data["bluf_bullets"] if str(b).strip()]
+    if _truthy(data.get("no_news")):
+        return {"no_news": True}
+    bullets = [_clean(b) for b in data["bluf_bullets"] if _clean(b)]
+    headline = _clean(data["straight_headline"])
+    confidence = min(1.0, max(0.0, float(data.get("confidence", 0.5))))
+    if headline_says_no_news(headline, confidence):
+        return {"no_news": True}
     if not 3 <= len(bullets) <= 5:
         raise ValueError("bluf_bullets must have 3-5 items")
     return {
-        "straight_headline": str(data["straight_headline"]).strip(),
+        "straight_headline": headline,
         "bluf_bullets": bullets,
-        "one_sentence": str(data["one_sentence"]).strip(),
+        "one_sentence": _clean(data["one_sentence"]),
         "topic_tags": [str(t).strip() for t in data.get("topic_tags", [])][:4],
-        "confidence": min(1.0, max(0.0, float(data.get("confidence", 0.5)))),
+        "confidence": confidence,
+        "no_news": False,
     }
+
+
+# --- is it the same story? (asked just before a story is summarized) ---
+
+GROUP_SCHEMA = {
+    "type": "object",
+    "properties": {"same": {"type": "array", "items": {"type": "integer"}}},
+    "required": ["same"],
+}
+
+GROUP_PROMPT = """You sort news for a reader who doesn't want to read the same story twice.
+
+MAIN STORY: {headline}
+{detail}
+
+OTHER STORIES:
+{candidates}
+
+Which of the other stories are about the same thing as the main story: the same news event,
+or the same specific product (the same car model, the same phone)? Sharing a company, a
+person, a place, or a broad topic is not enough. A roundup, digest, podcast episode, or
+deals post that covers several things is never the same story as anything.
+
+Return ONLY JSON: {{"same": [numbers of the matching other stories]}}"""
+
+
+def _brief(article, chars=200):
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", article.get("rss_description") or ""))[:chars].strip()
+
+
+def build_group_prompt(lead, members, candidates):
+    also = "".join(f"\nAlso reported as: {m['original_headline']}" for m in members[:3])
+    return GROUP_PROMPT.format(
+        headline=lead["original_headline"],
+        detail=(_brief(lead, 300) + also).strip() or "(no description)",
+        candidates="\n".join(
+            f"{n}. {c['original_headline']}" + (f" — {_brief(c)}" if _brief(c) else "")
+            for n, c in enumerate(candidates, 1)))
+
+
+def _parse_group(count):
+    def parse(text):
+        match = re.search(r"\{.*\}", text, re.S)
+        if not match:
+            raise ValueError("no JSON object in response")
+        same = json.loads(match.group(0)).get("same") or []
+        if isinstance(same, (str, int, float)):   # "1, 3" or 2 rather than a list
+            same = re.findall(r"\d+", str(same))
+        picked = set()
+        for n in same:
+            try:
+                n = int(float(n))
+            except (TypeError, ValueError):
+                continue
+            if 1 <= n <= count:
+                picked.add(n)
+        return sorted(picked)
+    return parse
 
 
 # --- Ollama model readiness ---
@@ -458,25 +687,26 @@ def _ollama_generate(base_url, model, prompt, schema=SUMMARY_SCHEMA):
         raise
 
 
-def call_ollama(prompt):
+def call_ollama(prompt, schema=SUMMARY_SCHEMA, parse=_parse_summary):
     base_url, model = target = _ollama_target()
     _await_ollama(target)
-    return _parse_summary(_ollama_generate(base_url, model, prompt))
+    return parse(_ollama_generate(base_url, model, prompt, schema))
 
 
-_anthropic_unsaved = [None, 0]   # [UTC day, answered calls that day with no usable summary]
+_anthropic_unsaved = [None, 0]   # [UTC day, calls that day that saved no summary]
 
 
 def _anthropic_calls_today():
     """Calls that count against the daily cap: saved summaries, plus replies
-    that were paid for but couldn't be used."""
+    that were paid for but couldn't be used, and same-story questions."""
     day = store.utc_day()
     if _anthropic_unsaved[0] != day:
         _anthropic_unsaved[:] = [day, 0]
     return store.anthropic_calls_today() + _anthropic_unsaved[1]
 
 
-def call_anthropic(prompt):
+def call_anthropic(prompt, schema=None, parse=_parse_summary):
+    """`schema` is for Ollama's structured output; Claude follows the prompt."""
     api_key = config.setting("anthropic_api_key")
     if not api_key:
         raise RuntimeError("Anthropic API key not set")
@@ -500,10 +730,13 @@ def call_anthropic(prompt):
         reply = resp.json()
         if reply.get("stop_reason") == "max_tokens":
             raise RuntimeError("reply hit the token limit")
-        return _parse_summary(reply["content"][0]["text"])
+        result = parse(reply["content"][0]["text"])
     except Exception:
         _anthropic_unsaved[1] += 1
         raise
+    if parse is not _parse_summary:   # nothing saved will count it
+        _anthropic_unsaved[1] += 1
+    return result
 
 
 _BACKENDS = {
@@ -650,18 +883,17 @@ def condense_headline(article):
     return " ".join(line.split()[:TICKER_MAX_WORDS])
 
 
-def summarize(article, source_name):
+def _route(prompt, schema, parse):
     """Router: try servers in the user's primary/secondary order (spec §6.1).
-    Returns (summary, provider, model) or raises if all enabled backends fail."""
+    Returns (result, provider, model) or raises if all enabled backends fail."""
     backends = enabled_backends()
     if not backends:
         raise RuntimeError("all AI servers are set to off")
-    prompt = build_prompt(article, source_name)
     errors = []
     for provider in backends:
         fn, model_name = _BACKENDS[provider]
         try:
-            summary = fn(prompt)
+            result = fn(prompt, schema, parse)
         except Cancelled:
             raise   # not a server failure: don't fall through to the next one
         except Exception as e:  # timeout, connection, malformed output
@@ -669,40 +901,128 @@ def summarize(article, source_name):
             errors.append(f"{provider}: {_short_error(e)}")
             continue
         _last_error.pop(provider, None)
-        return summary, provider, model_name()
+        return result, provider, model_name()
     raise RuntimeError("; ".join(errors))
 
 
-def body_to_summarize(article_id):
+_CORRECTION = """
+
+Your last answer said {found}, which the text above never states. Use only what it says."""
+
+
+def summarize(article, source_name, others=()):
+    """The story's summary: of the article alone, or combined with `others`
+    reporting the same story. Returns (summary, provider, model).
+    A summary that states a year or age the article doesn't is asked for
+    again, once; bullets that still do are dropped."""
+    prompt = build_prompt(article, source_name, others)
+    source = prompt[:prompt.rfind(_SUMMARY_FIELDS[:30])]   # the articles, not the instructions
+    first = _route(prompt, SUMMARY_SCHEMA, _parse_summary)
+    found = _summary_invents(first[0], source)
+    if not found:
+        return first
+    if first[1] == "anthropic":   # paid for, never saved
+        _anthropic_unsaved[1] += 1
+    try:
+        again = _route(prompt + _CORRECTION.format(found=", ".join(sorted(found))),
+                       SUMMARY_SCHEMA, _parse_summary)
+    except Cancelled:
+        raise
+    except Exception:
+        again = None
+    if again and not _summary_invents(again[0], source):
+        return again
+    summary, provider, model = again or first
+    return _without_invented(summary, source), provider, model
+
+
+def _is_lead(article):
+    """Still a card of its own: not folded into another story, and not found
+    to have no news."""
+    return not article["story_id"] and not article["no_news"]
+
+
+def _lead_text(article_id):
     """The story's row with its text in place, or None if there is nothing to
-    summarize (gone, or summarized meanwhile: its purged text isn't fetched
-    again just to be thrown away). Raises ingest.SiteDown like ensure_body."""
+    summarize (gone, summarized meanwhile — its purged text isn't fetched again
+    just to be thrown away — or no longer a card of its own). Raises
+    ingest.SiteDown like ensure_body."""
     article = store.get_article(article_id)
-    if not article or article["processed"]:
+    if not article or article["processed"] or not _is_lead(article):
         return None
     return ingest.ensure_body(article_id)
 
 
-def summarize_article(article_id, epoch=None):
-    """Summarize one story, on demand only. Raises RuntimeError if every
-    enabled server failed, or ingest.SiteDown while the story's site is down
-    (better to try again than to summarize the feed's blurb); the card keeps
-    its original headline meanwhile.
+def body_to_summarize(article_id):
+    """_lead_text, run ahead of the summary, off the summary worker's thread."""
+    return _lead_text(article_id)
+
+
+def fetch_member_texts(article_id):
+    """Fetch the text of the story's other reports, as far as their sites
+    allow, for its combined summary. Nothing waits on this: a report whose
+    text isn't in yet is summarized from its feed description."""
+    for other in stories.summary_members(article_id):
+        if other["body_text"] is None:
+            try:
+                ingest.ensure_body(other["id"], for_reader=False)
+            except ingest.SiteDown:
+                pass
+
+
+_grouped = set()   # stories already asked about this session: a retry doesn't ask again
+
+
+def fold_related(article, keep=()):
+    """Put the unread stories that come close to this one to the AI, and fold
+    the ones it says are the same story into this one (never one in `keep`).
+    If no server can answer they are left as they are; Cancelled is raised."""
+    if article["id"] in _grouped:
+        return
+    candidates = stories.fold_candidates(article, keep)
+    if candidates:
+        prompt = build_group_prompt(article, store.story_members(article["id"]), candidates)
+        try:
+            same, _, _ = _route(prompt, GROUP_SCHEMA, _parse_group(len(candidates)))
+        except Cancelled:
+            raise
+        except Exception as e:
+            print(f"[stories] same-story check failed: {e}")
+            return   # asked again if this story's summary has to be retried
+        _check_cancelled()   # the reader moved on while it was asked: ask again later
+        stories.fold(article["id"], [candidates[n - 1]["id"] for n in same])
+    _grouped.add(article["id"])
+
+
+def summarize_article(article_id, epoch=None, keep=()):
+    """Summarize one story, on demand only: its lead article combined with the
+    other reports of it. A story the AI finds no news in is hidden instead.
+    Raises RuntimeError if every enabled server failed, or ingest.SiteDown
+    while the story's site is down (better to try again than to summarize the
+    feed's blurb); the card keeps its original headline meanwhile.
     `epoch` is abort_epoch() from when the story was picked: an abandon()
-    since then cancels it wherever it has got to."""
+    since then cancels it wherever it has got to. `keep`: stories that must
+    not be folded into this one (the card on screen)."""
     _call.epoch = epoch
     try:
         _check_cancelled()   # before waiting on a fetch already under way
-        article = body_to_summarize(article_id)
+        article = _lead_text(article_id)
         _check_cancelled()
-        if not article or article["processed"]:
+        if not article or article["processed"] or not _is_lead(article):
             return
-        if not (article["body_text"] or "").strip():
+        fold_related(article, keep)
+        _check_cancelled()
+        others = stories.summary_members(article_id)
+        if not (article["body_text"] or "").strip() and not any(_text(o) for o in others):
             # neither the page nor the feed gave any text: a summary would be
             # invented from the headline
             raise RuntimeError("no article text to summarize")
         feeds = {f["id"]: f["name"] for f in store.get_feeds()}
-        summary, provider, model = summarize(article, feeds.get(article["feed_source_id"]))
-        store.save_summary(article_id, summary, provider, model)
+        summary, provider, model = summarize(
+            article, feeds.get(article["feed_source_id"]), others)
+        if summary["no_news"]:   # none of the reports it read has any
+            stories.drop_no_news(article_id, provider, model, also=[o["id"] for o in others])
+        else:
+            store.save_summary(article_id, summary, provider, model)
     finally:
         _call.epoch = None

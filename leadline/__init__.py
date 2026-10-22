@@ -1,3 +1,3 @@
 """LeadLine — an anti-clickbait BLUF news reader (UpFront spec implementation)."""
 
-__version__ = "1.5.0"
+__version__ = "1.6.0"
