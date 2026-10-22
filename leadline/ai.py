@@ -206,6 +206,28 @@ def _clean(text):
 
 _YEAR = re.compile(r"\b(?:19|20)\d\d\b")
 _AGE = re.compile(r"\b(\d{1,3})[\s-]*years?[\s-]*old\b", re.I)
+_UNITS = ("zero one two three four five six seven eight nine ten eleven twelve thirteen "
+          "fourteen fifteen sixteen seventeen eighteen nineteen").split()
+_TENS = "twenty thirty forty fifty sixty seventy eighty ninety".split()
+_NUMBER_WORD = re.compile(
+    rf"\b(?:({'|'.join(_TENS)})(?:[\s-]+({'|'.join(_UNITS[1:10])}))?|({'|'.join(_UNITS)}))\b",
+    re.I)
+
+
+def _word_value(m):
+    if m.group(3):
+        return str(_UNITS.index(m.group(3).lower()))
+    tens = 20 + 10 * _TENS.index(m.group(1).lower())
+    return str(tens + (_UNITS.index(m.group(2).lower()) if m.group(2) else 0))
+
+
+def _digits(text):
+    """Numbers written one way, so a faithful rewording isn't taken for an
+    invention: "2,000" is 2000, "three-year-old" and "twenty-three" are 3
+    and 23, and odd dashes and spaces are plain ones."""
+    text = re.sub(r"[\u00a0\u202f]", " ", re.sub(r"[\u2010-\u2015]", "-", text))
+    text = re.sub(r"(?<=\d),(?=\d{3}\b)", "", text)
+    return _NUMBER_WORD.sub(_word_value, text)
 
 
 def _year(when):
@@ -223,8 +245,8 @@ def _known(reports):
     digits: "19-year-old" isn't known because it is the 19th."""
     numbers = set()
     for r, body in reports:
-        numbers.update(re.findall(r"\d+", " ".join(
-            [r.get("original_headline") or "", r.get("rss_description") or "", body or ""])))
+        numbers.update(re.findall(r"\d+", _digits(" ".join(
+            [r.get("original_headline") or "", r.get("rss_description") or "", body or ""]))))
     years = {_year(r.get("pub_date")) for r, _ in reports} | {str(datetime.now().year)}
     return numbers, years - {None}
 
@@ -234,7 +256,7 @@ def _invented(text, known):
     _known): a model's own guesses from its training days, like "the 2024
     season" in a 2026 story."""
     numbers, years = known
-    text = re.sub(r"[\u00a0\u202f]", " ", re.sub(r"[\u2010-\u2015]", "-", text))
+    text = _digits(text)
     return ({y for y in _YEAR.findall(text) if y not in numbers and y not in years}
             | {f"{n}-year-old" for n in _AGE.findall(text) if n not in numbers})
 
@@ -248,12 +270,12 @@ def _summary_invents(summary, known):
 
 def _without_invented(summary, known):
     """The summary minus the bullets that state a year or age the article
-    doesn't. ValueError if the headline does, or too few bullets are left."""
-    if _invented(summary["straight_headline"], known):
-        raise ValueError("headline states a date the article doesn't")
+    doesn't, as long as one is left. It never fails: a story left with no
+    summary would be retried, and paid for, again and again. So if every
+    bullet states one, or the headline does, the summary stands as it is."""
     bullets = [b for b in summary["bluf_bullets"] if not _invented(b, known)]
-    if len(bullets) < 3:
-        raise ValueError("summary states dates the article doesn't")
+    if not bullets:
+        return summary
     one = summary["one_sentence"]
     return dict(summary, bluf_bullets=bullets,
                 one_sentence=bullets[0] if _invented(one, known) else one)
@@ -939,7 +961,7 @@ def summarize(article, source_name, others=()):
     """The story's summary: of the article alone, or combined with `others`
     reporting the same story. Returns (summary, provider, model).
     A summary that states a year or age the article doesn't is asked for
-    again, once; bullets that still do are dropped."""
+    again, once; bullets that still do are dropped (see _without_invented)."""
     prompt = build_prompt(article, source_name, others)
     known = _known(_reports(article, source_name, others))
     first = _route(prompt, SUMMARY_SCHEMA, _parse_summary)
@@ -959,11 +981,7 @@ def summarize(article, source_name, others=()):
         if not _summary_invents(again[0], known):
             return again
     summary, provider, model = again or first
-    try:
-        return _without_invented(summary, known), provider, model
-    except ValueError:
-        _count_unsaved((summary, provider, model))
-        raise
+    return _without_invented(summary, known), provider, model
 
 
 def _count_unsaved(result):

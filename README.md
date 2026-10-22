@@ -117,7 +117,9 @@ Summaries stick to the article. The model is told when the article was published
 today's date, and must not add a year, age or figure from its own memory. A model left to
 guess assumes the year its training ended in, so a 2026 story would come back as "the 2024
 season". A summary that still states a year or age the article never mentions is asked
-for once more with a correction, and any bullets still stating it are dropped.
+for once more with a correction, and bullets still stating it are dropped. ("2,000" and
+"2000", or "three-year-old" and "3-year-old", count as the same. A story is never left
+without a summary over this: if the headline or every bullet still states one, it stands.)
 
 A card that is still waiting shows where its summary stands — waiting its turn, summarizing
 now, or failed (with the reason) — under the original headline. A failed story is retried

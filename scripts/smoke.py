@@ -316,7 +316,8 @@ replies.append("third call answers honestly")
 assert ai.summarize(article_text, "Wire")[0]["bluf_bullets"][0] == "Out for the season."
 
 # every paid Claude reply the date check throws away counts against the daily
-# cap; one that is trimmed and saved is counted from the database instead
+# cap; the one that is saved is counted from the database instead. A story is
+# never left unsummarized (and retried, paid for, again) over the check
 headline_made_up = made_up.replace('"QB out for season"', '"QB out for 2024 season"')
 
 
@@ -336,17 +337,25 @@ def unsaved_delta(*replies):
     before = ai._anthropic_unsaved[1]
     ai._route = claude_route(*replies)
     try:
-        ai.summarize(article_text, "Wire")
-        outcome = "saved"
+        headline = ai.summarize(article_text, "Wire")[0]["straight_headline"]
     except ValueError:
-        outcome = "rejected"
-    return outcome, ai._anthropic_unsaved[1] - before
+        headline = None
+    return headline, ai._anthropic_unsaved[1] - before
 
 
-assert unsaved_delta(headline_made_up, headline_made_up) == ("rejected", 2)
-assert unsaved_delta(made_up, honest) == ("saved", 1)
-assert unsaved_delta(made_up, None) == ("saved", 0)       # retry failed: first one, trimmed
-assert unsaved_delta(headline_made_up, None) == ("rejected", 1)
+assert unsaved_delta(headline_made_up, headline_made_up) == ("QB out for 2024 season", 1)
+assert unsaved_delta(made_up, honest) == ("QB out for season", 1)
+assert unsaved_delta(made_up, None) == ("QB out for season", 0)   # retry failed: first, trimmed
+assert unsaved_delta(headline_made_up, None) == ("QB out for 2024 season", 0)
+
+# rewording a number isn't inventing it, and every bullet stating one leaves
+# the summary as it is rather than with none
+worded = ai._known([({"original_headline": "2,000 troops sent", "pub_date": "2026-10-19"},
+                     "A three-year-old and a twenty-three-year-old were hurt. 2000 more wait.")])
+assert ai._invented("2000 troops; the 3-year-old and 23-year-old; 2,000 more", worded) == set()
+assert ai._invented("the 4-year-old, in 2024", worded) == {"4-year-old", "2024"}
+all_made_up = ai._parse_summary(good.replace('["a", "b", "c"]', '["In 2024.", "In 2023.", "In 2022."]'))
+assert ai._without_invented(all_made_up, worded) == all_made_up
 ai._route = real_route
 
 # the upgrade redoes unread summaries made before the date check that state a
