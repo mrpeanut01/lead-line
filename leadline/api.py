@@ -408,17 +408,20 @@ class Api:
 
     def _upgrade_data(self):
         """Once, for a database from before stories: hide old summaries that
-        say there was no news, then group the recent stories."""
+        say there was no news, redo unread ones that state a year or age their
+        article doesn't, then group the recent stories."""
         if store.data_version() >= DATA_VERSION:
             return
         try:
             hidden = ai.hide_no_news_summaries()
+            redo = ai.redo_invented_summaries()
             grouped = stories.backfill()
         except Exception as e:   # never at the cost of the poll; tried again next time
             print(f"[stories] upgrade failed: {e}")
             return
         store.set_data_version(DATA_VERSION)
-        print(f"[stories] upgrade: {hidden} without news hidden, {grouped} grouped")
+        print(f"[stories] upgrade: {hidden} without news hidden, {redo} to summarize again, "
+              f"{grouped} grouped")
 
     def get_status(self):
         return store.status()

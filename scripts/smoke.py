@@ -349,6 +349,20 @@ assert unsaved_delta(made_up, None) == ("saved", 0)       # retry failed: first 
 assert unsaved_delta(headline_made_up, None) == ("rejected", 1)
 ai._route = real_route
 
+# the upgrade redoes unread summaries made before the date check that state a
+# year their article doesn't; a summary true to its article is kept
+redo_ids = []
+for n, (said, body) in enumerate((("Out for the 2024 season.", "He will miss the season."),
+                                  ("Deal runs through 2028.", "His deal runs through 2028."))):
+    url = f"http://x.test/redo/{n}"
+    article_id = store.insert_article(wire, url, ingest.dedup_hash(said, url), "QB out", "", store.now())
+    store.save_extraction(article_id, body, False, None)
+    store.save_summary(article_id, dict(ai._parse_summary(good), bluf_bullets=[said, "b", "c"]),
+                       "ollama", "smoke")
+    redo_ids.append(article_id)
+assert ai.redo_invented_summaries() == 1
+assert [store.get_article(i)["processed"] for i in redo_ids] == [0, 1]
+
 # the whole path, AI stubbed: the lead's summary first asks which nearby story
 # is the same, folds it in, then summarizes both; when that finds no news,
 # every report it read is hidden

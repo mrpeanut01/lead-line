@@ -178,8 +178,9 @@ LeadLine shows each story once.
   (a short note says so if it was the one on screen). If it led a story, the next best report
   leads it instead.
 
-The first launch after updating hides old summaries that already said there was no news and
-groups the last week's stories, once. Settings shows how many reports were combined and
+The first launch after updating hides old summaries that already said there was no news,
+drops unread summaries that state a year or age their article never mentions (they are made
+again, with the date check, when you reach them), and groups the last week's stories, once. Settings shows how many reports were combined and
 how many were skipped.
 
 ## Ticker view

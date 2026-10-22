@@ -164,6 +164,20 @@ def headline_says_no_news(headline, confidence):
             and bool(_META.search(headline or "")))
 
 
+def redo_invented_summaries():
+    """Unread summaries made before the date check that state a year or age
+    their article doesn't are made again when read. Only those whose text is
+    still kept can be checked. Returns how many."""
+    redo = []
+    for r in store.unread_summaries_with_text():
+        summary = {"no_news": False, "straight_headline": r["straight_headline"] or "",
+                   "one_sentence": r["one_sentence"] or "", "bluf_bullets": r["bluf_bullets"]}
+        if _summary_invents(summary, _known([(r, r["body_text"] or "")])):
+            redo.append(r["id"])
+    store.unsummarize(redo)
+    return len(redo)
+
+
 def hide_no_news_summaries():
     """Hide summaries made before no_news existed whose headline says there
     was nothing to summarize. Returns how many."""
