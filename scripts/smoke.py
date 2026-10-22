@@ -226,8 +226,11 @@ assert store.anthropic_calls_today() == claude_calls   # carried over, not a new
 bridge.set_feed_enabled(bose["feed_source_id"], True)
 
 # a real headline that happens to start like a no-news one is kept
-real = good.replace('"H"', '"No details released on suspect in Austin shooting"')
-assert not ai._parse_summary(real.replace('"confidence": 2', '"confidence": 0.3'))["no_news"]
+for real in ("No details released on suspect in Austin shooting",
+             "No details provided on suspect's motive in Austin shooting",
+             "No information yet on Article 5 response, NATO says"):
+    reply = good.replace('"H"', f'"{real}"').replace('"confidence": 2', '"confidence": 0.3')
+    assert not ai._parse_summary(reply)["no_news"], real
 assert bridge.request_summaries([pope["id"]])["states"][pope["id"]] == {
     "state": "hidden", "reason": "no_news"}
 

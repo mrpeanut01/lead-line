@@ -141,9 +141,10 @@ def build_prompt(article, source_name, others=()):
 
 # A model that finds nothing to summarize sometimes says so in the headline
 # instead of setting no_news ("Unable to summarize: article body contains only
-# a question"). Checked against every summary LeadLine had made, it matched
-# only those. It must also talk about the text itself (_META): "No details
-# released on suspect" is news.
+# a question"). It must also talk about the article itself (_META): "No
+# details provided on suspect's motive" and "No information yet on Article 5"
+# are news, and a match hides a story for good. Checked against all 3,636
+# summaries LeadLine had made, it matched only the 8 that said so.
 _NO_NEWS_HEADLINE = re.compile(
     r"^(?:unable|cannot|can't|could ?n[o']t)\b.{0,20}\b"
     r"(?:summari[sz]e|generate|determine|create|produce|extract|identify|write)"
@@ -155,7 +156,7 @@ _NO_NEWS_HEADLINE = re.compile(
     re.I)
 
 
-_META = re.compile(r"\b(?:article|body|text|content|summar\w*|headline|provided)\b", re.I)
+_META = re.compile(r"\barticles?\b(?!\s*\d)", re.I)   # not "Article 5"
 
 
 def headline_says_no_news(headline, confidence):
