@@ -9,7 +9,7 @@ from pathlib import Path
 
 import requests
 
-from . import ai, config, ingest, share, store
+from . import ai, config, ingest, share, store, stories
 
 if getattr(sys, "frozen", False):  # PyInstaller bundle
     _UI_DIR = Path(sys._MEIPASS) / "leadline" / "ui"
@@ -18,6 +18,7 @@ else:
 
 SUMMARY_RETRY_SECONDS = 30   # after every server failed a story, wait before retrying it
 SUMMARY_RETRY_MAX_SECONDS = 600   # the wait doubles each time the same story fails again
+DATA_VERSION = 1   # one-time data upgrades done (see _upgrade_data)
 
 
 class Api:
@@ -26,6 +27,7 @@ class Api:
         self._poll_lock = threading.Lock()
         self._work = threading.Condition()
         self._wanted = []    # stories the reader is waiting on, most urgent first
+        self._on_screen = []   # the cards the reader is looking at: never folded away
         self._working = None   # the one being summarized right now
         self._failed = {}    # article id -> (time its summary last failed, why, wait before retry)
         self._retry_gen = 0  # bumped by retry_summaries; older failures don't count
@@ -62,6 +64,11 @@ class Api:
         """A single story's card, e.g. one picked from the ticker tape."""
         return store.get_card(article_id)
 
+    def hidden_cards(self, article_ids):
+        """Which of these cards no longer stand on their own: id -> 'no_news'
+        (nothing to report in it) or 'merged' (now part of another story)."""
+        return store.hidden_reasons(list(dict.fromkeys(article_ids)))
+
     def share_story(self, article_id):
         """Share on a card: copy the story as a message to paste into
         iMessage or anywhere else. The text comes back too, so the page can
@@ -76,26 +83,32 @@ class Api:
         store.mark_read(article_id)
         return True
 
-    def request_summaries(self, article_ids):
+    def request_summaries(self, article_ids, on_screen=None):
         """The stories the reader is waiting on, most urgent first: the one on
         screen, then the read-ahead window. Each call replaces the last, so a
         story scrolled past stops costing model time and the one on screen is
         never stuck behind it. Stories are only summarized on demand — never
         pre-processed en masse. Returns each story's state for its card; a
         finished one comes with the card itself. The page sends one call at a
-        time, so calls arrive in the order it made them."""
+        time, so calls arrive in the order it made them. `on_screen`: the
+        cards in view, which no other story's summary may fold into itself."""
         asked = list(dict.fromkeys(article_ids))
         states = {}
         for i in asked:   # already summarized (or gone): nothing to queue
             card = store.get_card(i)
             if not card:
                 states[i] = {"state": "gone"}
+            elif card["no_news"] or card["story_id"]:
+                # no news in it, or now one of the reports on another card
+                states[i] = {"state": "hidden",
+                             "reason": "no_news" if card["no_news"] else "merged"}
             elif card["processed"]:
                 states[i] = {"state": "done", "card": card}
         with self._work:
             ids = [i for i in asked if i not in states]
             new = [i for i in ids if i not in self._wanted]
             self._wanted = ids
+            self._on_screen = list(on_screen if on_screen is not None else ids[:1])
             # a story scrolled past keeps its retry delay for a while, so
             # scrolling back doesn't start its backoff over
             now = time.time()
@@ -109,6 +122,8 @@ class Api:
             for i in ids:   # article text downloads while earlier stories summarize
                 if i not in self._bodies:
                     self._bodies[i] = self._fetch_pool.submit(ai.body_to_summarize, i)
+                    # the story's other reports too, but nothing waits for those
+                    self._fetch_pool.submit(ai.fetch_member_texts, i)
             self._work.notify_all()
             states.update(self._summary_states(ids))
             if self._working is not None and self._working not in ids:
@@ -119,7 +134,7 @@ class Api:
             ai.note_demand()
         return {"states": states}
 
-    def retry_summaries(self, article_ids):
+    def retry_summaries(self, article_ids, on_screen=None):
         """↻ on a waiting card: abandon whatever is in flight, forget recent
         failures, re-probe the AI servers, and resubmit these stories now."""
         with self._work:
@@ -128,7 +143,7 @@ class Api:
         self._forget_failures()
         ingest.forget_failures()
         ai.retry_now()
-        return self.request_summaries(article_ids)
+        return self.request_summaries(article_ids, on_screen)
 
     def _forget_failures(self):
         """Stories and ticker lines that failed a moment ago may go again now."""
@@ -173,15 +188,17 @@ class Api:
                         body = self._bodies[due[0]] = self._fetch_pool.submit(
                             ai.body_to_summarize, due[0])
                     # the epoch is read here, under the lock that decides a
-                    # story is stale, so no abandon() of it can be missed
-                    return due[0], self._retry_gen, body, ai.abort_epoch()
+                    # story is stale, so no abandon() of it can be missed.
+                    # No other story's summary may fold away a card in view
+                    return (due[0], self._retry_gen, body, ai.abort_epoch(),
+                            list(self._on_screen))
                 self._work.wait(min(waits) if waits else None)
 
     def _summary_worker(self):
         """One story at a time, always the most urgent one the reader is
         waiting on at that moment."""
         while True:
-            article_id, gen, body, epoch = self._next_summary()
+            article_id, gen, body, epoch, keep = self._next_summary()
             error, site_retry_at = None, None
             try:
                 waited = time.time()
@@ -189,7 +206,7 @@ class Api:
                 while (not body.done() and ai.abort_epoch() == epoch
                        and time.time() - waited < 60):
                     wait([body], timeout=1)
-                ai.summarize_article(article_id, epoch)
+                ai.summarize_article(article_id, epoch, keep)
             except ai.Cancelled:
                 error = ""     # resubmitted: goes again at once
             except ingest.SiteDown as e:
@@ -295,10 +312,13 @@ class Api:
         return store.get_feeds()
 
     def remove_feed(self, feed_id):
+        stories.release_feed(feed_id)   # its stories others reported stay on offer
         store.remove_feed(feed_id)
         return store.get_feeds()
 
     def set_feed_enabled(self, feed_id, enabled):
+        if not enabled:
+            stories.release_feed(feed_id)
         store.set_feed_enabled(feed_id, enabled)
         return store.get_feeds()
 
@@ -367,8 +387,7 @@ class Api:
         if not self._refresh_lock.acquire(blocking=False):
             return {"running": True}
         try:
-            with self._poll_lock:
-                new = ingest.poll_all_feeds()
+            new = self._poll()
             ingest.extract_pending()
             store.purge_stale_bodies()
             return {"running": False, "new": new}
@@ -380,8 +399,29 @@ class Api:
         whatever is new. Poll only — extraction runs on the pipeline schedule
         and summaries on demand — so the button answers in seconds. If a
         scheduled poll is mid-flight, wait for it rather than skip."""
+        return {"new": self._poll()}
+
+    def _poll(self):
         with self._poll_lock:
-            return {"new": ingest.poll_all_feeds()}
+            self._upgrade_data()
+            return ingest.poll_all_feeds()
+
+    def _upgrade_data(self):
+        """Once, for a database from before stories: hide old summaries that
+        say there was no news, redo unread ones that state a year or age their
+        article doesn't, then group the recent stories."""
+        if store.data_version() >= DATA_VERSION:
+            return
+        try:
+            hidden = ai.hide_no_news_summaries()
+            redo = ai.redo_invented_summaries()
+            grouped = stories.backfill()
+        except Exception as e:   # never at the cost of the poll; tried again next time
+            print(f"[stories] upgrade failed: {e}")
+            return
+        store.set_data_version(DATA_VERSION)
+        print(f"[stories] upgrade: {hidden} without news hidden, {redo} to summarize again, "
+              f"{grouped} grouped")
 
     def get_status(self):
         return store.status()

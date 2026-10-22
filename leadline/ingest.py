@@ -17,7 +17,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import feedparser
 import requests
 
-from . import config, store
+from . import config, store, stories
 
 USER_AGENT = "LeadLine/1.0 (personal news reader)"
 TRACKING_PARAMS = re.compile(r"^(utm_|fbclid|gclid|mc_|ref$|ref_|cmpid|ito$)", re.I)
@@ -53,8 +53,9 @@ def _entry_pub_date(entry):
     return now.isoformat()
 
 
-def poll_feed(feed):
-    """Conditional GET; on 304 stop, on 200 store validators then parse (spec §5.1)."""
+def poll_feed(feed, index=None):
+    """Conditional GET; on 304 stop, on 200 store validators then parse (spec §5.1).
+    New articles join the story they report (`index`: recent headlines)."""
     headers = {"User-Agent": USER_AGENT}
     if feed["etag"]:
         headers["If-None-Match"] = feed["etag"]
@@ -73,19 +74,19 @@ def poll_feed(feed):
     if parsed.entries or not parsed.bozo:   # not an error page served as 200: that is asked for again
         store.update_feed_fetch_meta(
             feed["id"], resp.headers.get("ETag"), resp.headers.get("Last-Modified"))
-    new = 0
+    entries = []
     for entry in parsed.entries[:50]:
         link = entry.get("link")
         title = entry.get("title")
         if not link or not title:
             continue
         canonical = canonicalize_url(link)
-        pub = _entry_pub_date(entry)
-        desc = re.sub(r"<[^>]+>", " ", entry.get("summary", "") or "").strip()
-        if store.insert_article(feed["id"], canonical, dedup_hash(title, canonical),
-                                title.strip(), desc, pub):
-            new += 1
-    return new
+        entries.append({
+            "feed_source_id": feed["id"], "canonical_url": canonical,
+            "dedup_hash": dedup_hash(title, canonical), "original_headline": title.strip(),
+            "rss_description": re.sub(r"<[^>]+>", " ", entry.get("summary", "") or "").strip(),
+            "pub_date": _entry_pub_date(entry)})
+    return stories.add_articles(index or stories.Index.recent()[0], entries)
 
 
 def poll_all_feeds():
@@ -94,14 +95,15 @@ def poll_all_feeds():
     feeds = store.get_feeds(enabled_only=True)
     if not feeds:
         return 0
+    index = stories.Index.recent()[0]   # shared, so one feed's new stories group the next's
     with ThreadPoolExecutor(max_workers=min(8, len(feeds))) as pool:
-        return sum(pool.map(_poll_feed_safely, feeds))
+        return sum(pool.map(lambda f: _poll_feed_safely(f, index), feeds))
 
 
-def _poll_feed_safely(feed):
+def _poll_feed_safely(feed, index):
     """One feed's malformed entry must not cost the others their poll."""
     try:
-        return poll_feed(feed)
+        return poll_feed(feed, index)
     except Exception as e:
         print(f"[ingest] {feed['name']}: {e}")
         return 0

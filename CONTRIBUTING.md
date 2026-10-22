@@ -25,8 +25,10 @@ leadline/
   config.py    env defaults + settings.json (user-editable at runtime)
   store.py     SQLite: articles, feed_sources; TTL purge of body text
   ingest.py    RSS poll (conditional GET) → dedup hash → extraction (stdlib HTMLParser)
+  stories.py   one card per story: groups new articles by headline similarity,
+               picks AI same-story candidates, re-leads a story when its lead goes
   ai.py        prompt + router: primary/secondary servers (Ollama, Anthropic),
-               Ollama model warm-up monitor + status
+               Ollama model warm-up monitor + status; combined, date-checked summaries
   share.py     Share button: the story as plain text for iMessage, onto the clipboard
   api.py       pywebview JS bridge — every UI capability is a method here
   app.py       entry point: background pipeline thread + window
@@ -39,6 +41,13 @@ Design rules worth knowing before you patch:
   read-ahead window (`request_summaries`), never in bulk from the pipeline. The ticker
   view's one-line condensations (`get_ticker`) are limited to the stories on its tape and
   go to Ollama only, never through the Claude fallback.
+- **One exception to the read-ahead boundary: the same-story check.** When a story in the
+  window is summarized, `ai.fold_related` sends the headlines and feed descriptions (no
+  article text) of up to six nearby unread stories, which may be outside the window, to
+  Ollama only, to ask which are the same story. A story it confirms joins the story being
+  read, so its text then goes into that card's combined summary, to whichever server writes
+  summaries (Claude included). Nothing else crosses the boundary; don't widen it without a
+  maintainer decision.
 - **Bodies are transient.** Extracted article text is TTL-purged (default 24 h); only
   summaries and headlines persist. Don't add long-term full-text storage.
 - **Respect publishers.** robots.txt stays on; attribution stays prominent.
