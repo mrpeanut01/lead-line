@@ -276,6 +276,39 @@ assert summary["bluf_bullets"] == ["His deal runs through 2028.", "The 28-year-o
                                    "He is on injured reserve."], summary
 replies.append("third call answers honestly")
 assert ai.summarize(article_text, "Wire")[0]["bluf_bullets"][0] == "Out for the season."
+
+# every paid Claude reply the date check throws away counts against the daily
+# cap; one that is trimmed and saved is counted from the database instead
+headline_made_up = made_up.replace('"QB out for season"', '"QB out for 2024 season"')
+
+
+def claude_route(*replies):
+    queue = list(replies)
+
+    def route(prompt, schema, parse):
+        reply = queue.pop(0)
+        if reply is None:
+            raise RuntimeError("anthropic: HTTP 529")
+        return parse(reply), "anthropic", "claude-smoke"
+    return route
+
+
+def unsaved_delta(*replies):
+    ai._anthropic_calls_today()
+    before = ai._anthropic_unsaved[1]
+    ai._route = claude_route(*replies)
+    try:
+        ai.summarize(article_text, "Wire")
+        outcome = "saved"
+    except ValueError:
+        outcome = "rejected"
+    return outcome, ai._anthropic_unsaved[1] - before
+
+
+assert unsaved_delta(headline_made_up, headline_made_up) == ("rejected", 2)
+assert unsaved_delta(made_up, honest) == ("saved", 1)
+assert unsaved_delta(made_up, None) == ("saved", 0)       # retry failed: first one, trimmed
+assert unsaved_delta(headline_made_up, None) == ("rejected", 1)
 ai._route = real_route
 
 # the whole path, AI stubbed: the lead's summary first asks which nearby story

@@ -921,19 +921,32 @@ def summarize(article, source_name, others=()):
     found = _summary_invents(first[0], source)
     if not found:
         return first
-    if first[1] == "anthropic":   # paid for, never saved
-        _anthropic_unsaved[1] += 1
     try:
         again = _route(prompt + _CORRECTION.format(found=", ".join(sorted(found))),
                        SUMMARY_SCHEMA, _parse_summary)
     except Cancelled:
+        _count_unsaved(first)
         raise
     except Exception:
-        again = None
-    if again and not _summary_invents(again[0], source):
-        return again
+        again = None   # the first reply, trimmed, may still do
+    if again:
+        _count_unsaved(first)   # the retry replaces it
+        if not _summary_invents(again[0], source):
+            return again
     summary, provider, model = again or first
-    return _without_invented(summary, source), provider, model
+    try:
+        return _without_invented(summary, source), provider, model
+    except ValueError:
+        _count_unsaved((summary, provider, model))
+        raise
+
+
+def _count_unsaved(result):
+    """A Claude reply that won't be saved still counts against the daily cap:
+    it was paid for. (A saved summary is counted from the database.)"""
+    if result[1] == "anthropic":
+        _anthropic_calls_today()   # starts a new day's count if the day changed
+        _anthropic_unsaved[1] += 1
 
 
 def _is_lead(article):
