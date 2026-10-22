@@ -206,28 +206,13 @@ def _clean(text):
 
 _YEAR = re.compile(r"\b(?:19|20)\d\d\b")
 _AGE = re.compile(r"\b(\d{1,3})[\s-]*years?[\s-]*old\b", re.I)
-_UNITS = ("zero one two three four five six seven eight nine ten eleven twelve thirteen "
-          "fourteen fifteen sixteen seventeen eighteen nineteen").split()
-_TENS = "twenty thirty forty fifty sixty seventy eighty ninety".split()
-_NUMBER_WORD = re.compile(
-    rf"\b(?:({'|'.join(_TENS)})(?:[\s-]+({'|'.join(_UNITS[1:10])}))?|({'|'.join(_UNITS)}))\b",
-    re.I)
-
-
-def _word_value(m):
-    if m.group(3):
-        return str(_UNITS.index(m.group(3).lower()))
-    tens = 20 + 10 * _TENS.index(m.group(1).lower())
-    return str(tens + (_UNITS.index(m.group(2).lower()) if m.group(2) else 0))
-
-
 def _digits(text):
     """Numbers written one way, so a faithful rewording isn't taken for an
-    invention: "2,000" is 2000, "three-year-old" and "twenty-three" are 3
-    and 23, and odd dashes and spaces are plain ones."""
+    invention: "2,000" is 2000, and odd dashes and spaces are plain ones.
+    (Spelled-out numbers aren't read: news style writes ages in figures, and
+    a miss costs one retry at most, never the summary.)"""
     text = re.sub(r"[\u00a0\u202f]", " ", re.sub(r"[\u2010-\u2015]", "-", text))
-    text = re.sub(r"(?<=\d),(?=\d{3}\b)", "", text)
-    return _NUMBER_WORD.sub(_word_value, text)
+    return re.sub(r"(?<=\d),(?=\d{3}\b)", "", text)
 
 
 def _year(when):

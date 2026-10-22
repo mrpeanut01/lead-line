@@ -351,8 +351,8 @@ assert unsaved_delta(headline_made_up, None) == ("QB out for 2024 season", 0)
 # rewording a number isn't inventing it, and every bullet stating one leaves
 # the summary as it is rather than with none
 worded = ai._known([({"original_headline": "2,000 troops sent", "pub_date": "2026-10-19"},
-                     "A three-year-old and a twenty-three-year-old were hurt. 2000 more wait.")])
-assert ai._invented("2000 troops; the 3-year-old and 23-year-old; 2,000 more", worded) == set()
+                     "A 3\u2011year\u2011old was hurt. 2000 more wait.")])
+assert ai._invented("2000 troops; the 3-year-old; 2,000 more", worded) == set()
 assert ai._invented("the 4-year-old, in 2024", worded) == {"4-year-old", "2024"}
 all_made_up = ai._parse_summary(good.replace('["a", "b", "c"]', '["In 2024.", "In 2023.", "In 2022."]'))
 assert ai._without_invented(all_made_up, worded) == all_made_up
