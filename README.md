@@ -107,9 +107,11 @@ immediately; environment variables below act as defaults only.
 Stories are summarized **on demand only** — the story on screen plus the **Read ahead**
 window (0–10, default 1). Nothing is sent to a model before you're about to read it, and a
 story you scroll past stops being summarized so the one on screen goes next. A story's
-summary covers every report of it (see [One card per story](#one-card-per-story)). The two
-exceptions, the ticker's one-line headlines and the same-story check, send only headlines
-and feed descriptions, and only to your Ollama server, never Claude.
+summary covers every report of it (see [One card per story](#one-card-per-story)). Two
+things send more than that, and only to your Ollama server, never Claude: the ticker's
+one-line headlines, and the same-story check, which sends the headlines and feed
+descriptions (no article text) of up to six unread stories near the one being summarized,
+even ones beyond the read-ahead window.
 
 Summaries stick to the article. The model is told when the article was published and
 today's date, and must not add a year, age or figure from its own memory. A model left to

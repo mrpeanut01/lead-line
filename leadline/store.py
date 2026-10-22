@@ -342,22 +342,6 @@ def summarized_headlines():
                  "WHERE processed = 1 AND no_news = 0")
 
 
-def unread_summaries_with_text():
-    """Unread summaries whose article text is still kept, bullets decoded."""
-    rows = query("SELECT * FROM articles WHERE processed = 1 AND no_news = 0 AND is_read = 0 "
-                 "AND body_text IS NOT NULL AND body_text != ''")
-    for r in rows:
-        r["bluf_bullets"] = json.loads(r["bluf_bullets"]) if r["bluf_bullets"] else []
-    return rows
-
-
-def unsummarize(article_ids):
-    """Drop these summaries: each is made again when its story is read."""
-    if article_ids:
-        execute("UPDATE articles SET processed = 0, straight_headline = NULL, bluf_bullets = NULL, "
-                f"one_sentence = NULL WHERE id IN ({_marks(article_ids)})", tuple(article_ids))
-
-
 def hidden_reasons(article_ids):
     """Of these stories, the ones no longer offered on a card of their own:
     id -> 'no_news', or 'merged' (now part of another story)."""

@@ -252,9 +252,15 @@ def backfill():
         return sum(len(ids) for ids in joined.values())
 
 
+def enabled_members(lead_id):
+    """The story's other reports from feeds that are on: a feed the reader
+    turned off is never fetched, summarized, or put on a card."""
+    return [m for m in store.story_members(lead_id) if m["feed_enabled"]]
+
+
 def summary_members(lead_id, limit=3):
     """The story's other reports to combine into its summary, best first."""
-    return sorted(store.story_members(lead_id), key=rank, reverse=True)[:limit]
+    return sorted(enabled_members(lead_id), key=rank, reverse=True)[:limit]
 
 
 def fold_candidates(lead, keep=()):
@@ -286,16 +292,18 @@ def fold_candidates(lead, keep=()):
 
 def drop_no_news(article_id, provider=None, model=None, also=()):
     """The article turned out to have no news: hide it, and `also` (the story's
-    other reports the AI read with it). If the story has others, the best of
-    them leads it now. provider/model: the AI that just found that out (None:
-    an old summary, already counted)."""
+    other reports the AI read with it). If the story has others from feeds
+    that are on, the best of them leads it now (one from a feed that is off
+    would never be offered). provider/model: the AI that just found that out
+    (None: an old summary, already counted)."""
     with _lock:
         store.mark_no_news(article_id, provider, model)
         for other in also:
             store.mark_no_news(other)
         members = store.story_members(article_id)
-        if members:
-            lead = max(members, key=rank)
+        enabled = [m for m in members if m["feed_enabled"]]
+        if enabled:
+            lead = max(enabled, key=rank)
             store.set_lead(lead["id"], [m["id"] for m in members] + [article_id])
 
 

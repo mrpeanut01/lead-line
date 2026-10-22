@@ -40,8 +40,12 @@ Design rules worth knowing before you patch:
 - **Summarize on demand only.** Articles are summarized when they enter the reader's
   read-ahead window (`request_summaries`), never in bulk from the pipeline. The ticker
   view's one-line condensations (`get_ticker`) are limited to the stories on its tape and
-  go to Ollama only, never through the Claude fallback. So does the same-story check
-  (`ai.fold_related`), which sends nearby unread stories' headlines and descriptions.
+  go to Ollama only, never through the Claude fallback.
+- **One exception to the read-ahead boundary: the same-story check.** When a story in the
+  window is summarized, `ai.fold_related` sends the headlines and feed descriptions (no
+  article text) of up to six nearby unread stories, which may be outside the window, to
+  Ollama only, to ask which are the same story. Nothing else crosses the boundary; don't
+  widen it without a maintainer decision.
 - **Bodies are transient.** Extracted article text is TTL-purged (default 24 h); only
   summaries and headlines persist. Don't add long-term full-text storage.
 - **Respect publishers.** robots.txt stays on; attribution stays prominent.

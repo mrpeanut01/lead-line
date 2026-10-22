@@ -225,6 +225,24 @@ assert offered[0]["processed"] and offered[0]["straight_headline"] == "H", offer
 assert store.anthropic_calls_today() == claude_calls   # carried over, not a new call
 bridge.set_feed_enabled(bose["feed_source_id"], True)
 
+# a feed turned off stays out of a story: not fetched or summarized as one of
+# its reports, and never made its lead (it would never be offered)
+store.add_feed("Muted", "http://muted.test/rss")
+muted = next(f["id"] for f in store.get_feeds() if f["name"] == "Muted")
+stories.add_articles(index, [
+    entry(wire, "Ferry capsizes off Java with 130 passengers aboard", 13),
+    entry(cars, "Ferry capsizes off Java with 130 passengers aboard, rescue under way", 13.2)])
+stories.add_articles(index, [   # joins later, as a member: the best-ranked report of all
+    entry(muted, "Ferry capsizes off Java with 130 passengers aboard: what we know so far "
+                 "about the rescue and the ship", 13.4, "A much longer report. " * 20)])
+ferry = next(c for c in store.get_queue(100) if c["original_headline"].startswith("Ferry"))
+assert ferry["feed_source_id"] != muted and len(ferry["related"]) == 2, ferry
+bridge.set_feed_enabled(muted, False)   # it doesn't lead, so nothing is re-led
+assert muted not in [m["feed_source_id"] for m in stories.summary_members(ferry["id"])]
+stories.drop_no_news(ferry["id"])
+offered = [c for c in store.get_queue(100) if c["original_headline"].startswith("Ferry")]
+assert len(offered) == 1 and offered[0]["feed_source_id"] not in (muted, ferry["feed_source_id"]), offered
+
 # a real headline that happens to start like a no-news one is kept
 for real in ("No details released on suspect in Austin shooting",
              "No details provided on suspect's motive in Austin shooting",
