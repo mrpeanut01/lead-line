@@ -309,7 +309,7 @@ def fold(lead_id, article_ids):
 def release_feed(feed_id):
     """Before a feed is turned off or removed: its stories that enabled feeds
     also reported are led by one of those reports instead, so they stay on
-    offer."""
+    offer, with the summary they already have."""
     with _lock:
         for lead_id in store.leads_from_feed(feed_id):
             members = store.story_members(lead_id)
@@ -317,3 +317,4 @@ def release_feed(feed_id):
             if others:
                 lead = max(others, key=rank)
                 store.set_lead(lead["id"], [m["id"] for m in members] + [lead_id])
+                store.carry_summary(lead_id, lead["id"])

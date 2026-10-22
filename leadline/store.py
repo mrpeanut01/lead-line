@@ -312,6 +312,20 @@ def set_lead(lead_id, article_ids):
     _batch(statements)
 
 
+def carry_summary(from_id, to_id):
+    """A story's new lead takes over the summary its old lead had (it is the
+    story's summary, not one report's), so the story isn't summarized, and
+    paid for, again. Not ai_processed_at: no new call was made."""
+    execute(
+        "UPDATE articles SET (straight_headline, bluf_bullets, one_sentence, topic_tags, "
+        "confidence_score, ai_provider, ai_model, processed) = ("
+        "  SELECT straight_headline, bluf_bullets, one_sentence, topic_tags, "
+        "  confidence_score, ai_provider, ai_model, 1 FROM articles WHERE id = ?) "
+        "WHERE id = ? AND processed = 0 AND EXISTS ("
+        "  SELECT 1 FROM articles WHERE id = ? AND processed = 1 AND no_news = 0)",
+        (from_id, to_id, from_id))
+
+
 def mark_no_news(article_id, provider=None, model=None):
     """The AI found nothing to report in it: never offered, never summarized
     again. provider/model: the call that found it (None: an earlier summary)."""

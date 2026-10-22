@@ -107,7 +107,9 @@ immediately; environment variables below act as defaults only.
 Stories are summarized **on demand only** — the story on screen plus the **Read ahead**
 window (0–10, default 1). Nothing is sent to a model before you're about to read it, and a
 story you scroll past stops being summarized so the one on screen goes next. A story's
-summary covers every report of it (see [One card per story](#one-card-per-story)).
+summary covers every report of it (see [One card per story](#one-card-per-story)). The two
+exceptions, the ticker's one-line headlines and the same-story check, send only headlines
+and feed descriptions, and only to your Ollama server, never Claude.
 
 Summaries stick to the article. The model is told when the article was published and
 today's date, and must not add a year, age or figure from its own memory. A model left to
@@ -155,12 +157,14 @@ LeadLine shows each story once.
   headlines. Words count by how rare they are, so a shared model name or place weighs far
   more than a shared "Apple" or "Trump". A close match joins that story. This happens at
   poll time, without a model.
-- **Closer calls go to the AI.** Just before a story is summarized, unread stories that come
+- **Closer calls go to Ollama.** Just before a story is summarized, unread stories that come
   close to it — similar headlines, a shared name like "iPhone Duo", or the same site posting
-  at the same moment — are put to the AI as one short question: which of these are the same
-  news event or the same specific product? A shared company, person or topic isn't enough,
-  and roundups, podcasts and deals posts never count. The ones it confirms join the story.
-  This sends those stories' headlines and feed descriptions to the AI server.
+  at the same moment — are put to your Ollama model as one short question: which of these
+  are the same news event or the same specific product? A shared company, person or topic
+  isn't enough, and roundups, podcasts and deals posts never count. The ones it confirms
+  join the story. Like the ticker, this is Ollama only: those stories' headlines and feed
+  descriptions never go to Claude, and while Ollama is off or still loading, the check is
+  skipped and they stay cards of their own.
 - **One combined summary.** The card's summary is written from up to four of the story's
   reports, what they agree on first and then what only some of them add. The source bar shows
   **+N more reports**, and **N reports on this story** under the bullets lists them all,

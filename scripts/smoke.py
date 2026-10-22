@@ -209,15 +209,20 @@ assert pope2["related"] == [] and store.status()["no_news"] == 1
 bridge = api.Api()
 assert bridge.hidden_cards([pope["id"], pope2["id"]]) == {pope["id"]: "no_news"}
 
-# turning off a lead's feed: another feed's report leads the story, still offered
+# turning off a lead's feed: another feed's report leads the story, still
+# offered, and with the summary the story already had (not paid for again)
 duel = [entry(wire, "Bose acquires Skullcandy headphone brand in surprise deal", 12),
         entry(cars, "Bose acquires Skullcandy headphone brand in surprise deal today", 12.5)]
 stories.add_articles(index, duel)
 bose = next(c for c in store.get_queue(100) if c["original_headline"].startswith("Bose"))
 assert len(bose["related"]) == 1
+store.save_summary(bose["id"], ai._parse_summary(good), "anthropic", "claude-smoke")
+claude_calls = store.anthropic_calls_today()
 bridge.set_feed_enabled(bose["feed_source_id"], False)
 offered = [c for c in store.get_queue(100) if c["original_headline"].startswith("Bose")]
 assert [c["id"] for c in offered] == [bose["related"][0]["id"]], offered
+assert offered[0]["processed"] and offered[0]["straight_headline"] == "H", offered[0]
+assert store.anthropic_calls_today() == claude_calls   # carried over, not a new call
 bridge.set_feed_enabled(bose["feed_source_id"], True)
 
 # a real headline that happens to start like a no-news one is kept
@@ -239,10 +244,18 @@ review = next(a for a in duo if a["original_headline"].startswith("iPhone Duo re
 pencil = next(a for a in duo if "Pencil" in a["original_headline"])
 assert [c["id"] for c in stories.fold_candidates(review)] == [pencil["id"]]
 assert stories.fold_candidates(review, keep=[pencil["id"]]) == []
-real_route = ai._route
-ai._route = lambda prompt, schema, parse: (parse('{"same": [1, 7]}'), "ollama", "smoke")
+real_route, real_ollama, real_ready = ai._route, ai.call_ollama, ai.ollama_ready
+# Ollama only, like the ticker: with its model not loaded nothing is asked
+# (and Claude never is), and the stories stay apart
+ai._route = lambda *a: (_ for _ in ()).throw(AssertionError("asked Claude's router"))
+ai.call_ollama = lambda *a: (_ for _ in ()).throw(AssertionError("asked a model not loaded"))
+ai.ollama_ready = lambda: False
 ai.fold_related(review)
-ai._route = real_route
+assert bridge.hidden_cards([pencil["id"]]) == {}
+ai.ollama_ready = lambda: True
+ai.call_ollama = lambda prompt, schema, parse: parse('{"same": [1, 7]}')
+ai.fold_related(review)
+ai._route, ai.call_ollama = real_route, real_ollama
 assert bridge.hidden_cards([pencil["id"]]) == {pencil["id"]: "merged"}
 assert [r["id"] for r in store.get_card(review["id"])["related"]] == [pencil["id"]]
 
@@ -257,6 +270,10 @@ article_text = {"original_headline": "QB to miss rest of season", "pub_date": "2
                 "body_text": "Hurts, 28, will miss the rest of the season. His deal runs through 2028."}
 prompt = ai.build_prompt(article_text, "Wire")
 assert "PUBLISHED: Monday, October 19, 2026" in prompt and "TODAY: " in prompt
+# checked against the article's own text: the 19 of its date isn't an age it
+# states, but the year it was published is one the model may use
+known = ai._known(ai._reports(article_text, "Wire"))
+assert ai._invented("The 19-year-old, 28-year-old and the 2026 season", known) == {"19-year-old"}
 made_up = ('{"straight_headline": "QB out for season", "bluf_bullets": ["Out for the 2024 season.", '
            '"The 23‑year‑old has clots.", "His deal runs through 2028.", "The 28-year-old will '
            'recover.", "He is on injured reserve."], "one_sentence": "s", "topic_tags": [], "confidence": 0.9}')
@@ -323,18 +340,22 @@ lead, other = sorted(pod, key=lambda a: a["pub_date"])
 asked = []
 
 
-def stub_route(prompt, schema, parse):
+def stub_ollama(prompt, schema, parse):   # the same-story question
     asked.append(prompt)
-    if schema is ai.GROUP_SCHEMA:
-        return parse('{"same": [1]}'), "ollama", "smoke"
+    return parse('{"same": [1]}')
+
+
+def stub_route(prompt, schema, parse):      # the summary
+    asked.append(prompt)
     return parse('{"no_news": true}'), "ollama", "smoke"
 
 
-ai._route = stub_route
+ai._route, ai.call_ollama = stub_route, stub_ollama
 real_ensure = ingest.ensure_body
 ingest.ensure_body = lambda article_id, for_reader=True: store.get_article(article_id)
 ai.summarize_article(lead["id"], keep=[])
-ai._route, ingest.ensure_body = real_route, real_ensure
+ai._route, ai.call_ollama, ingest.ensure_body = real_route, real_ollama, real_ensure
+ai.ollama_ready = real_ready
 assert "Hands on with Claude Duet" in asked[0] and "REPORT 2" in asked[1], asked
 assert bridge.hidden_cards([lead["id"], other["id"]]) == {lead["id"]: "no_news", other["id"]: "no_news"}
 

@@ -13,7 +13,7 @@ If another model is already in memory at launch, the reader is asked whether
 to use it for the session rather than wait for the configured one to load.
 
 A story reported more than once gets one summary combined from its reports
-(see stories.py), after the AI is asked which nearby unread stories are the
+(see stories.py), after Ollama is asked which nearby unread stories are the
 same story. A story the AI finds no news in is hidden instead of summarized.
 """
 import json
@@ -112,24 +112,31 @@ def _day(when=None):
     return f"{t:%A, %B} {t.day}, {t.year}"
 
 
+def _reports(article, source_name, others=()):
+    """[(report, its text as the prompt sends it)]: the lead article, plus
+    `others` (rows with source_name) reporting the same story."""
+    if not others:
+        return [(dict(article, source_name=source_name),
+                 (article.get("body_text") or "")[:BODY_CHARS])]
+    reports = [dict(article, source_name=source_name), *others]
+    share = COMBINED_BODY_CHARS // len(reports)
+    return [(r, _text(r)[:share]) for r in reports]
+
+
 def build_prompt(article, source_name, others=()):
     """The summary prompt for a story: its lead article, plus `others` (rows
     with source_name) reporting the same story, combined into one summary."""
-    if not others:
+    reports = _reports(article, source_name, others)
+    if len(reports) == 1:
+        r, body = reports[0]
         return PROMPT_TEMPLATE.format(
-            original_headline=article["original_headline"],
-            source_name=source_name or "Unknown",
-            published=_day(article.get("pub_date")), today=_day(),
-            body=(article.get("body_text") or "")[:BODY_CHARS],
-        )
-    reports = [dict(article, source_name=source_name), *others]
-    share = COMBINED_BODY_CHARS // len(reports)
+            original_headline=r["original_headline"], source_name=source_name or "Unknown",
+            published=_day(r.get("pub_date")), today=_day(), body=body)
     return COMBINED_PROMPT_TEMPLATE.format(count=len(reports), today=_day(), reports="\n\n".join(
         _REPORT.format(n=n, source_name=r.get("source_name") or "Unknown",
                        published=_day(r.get("pub_date")),
-                       original_headline=r["original_headline"],
-                       body=_text(r)[:share] or "(no text)")
-        for n, r in enumerate(reports, 1)))
+                       original_headline=r["original_headline"], body=body or "(no text)")
+        for n, (r, body) in enumerate(reports, 1)))
 
 
 # A model that finds nothing to summarize sometimes says so in the headline
@@ -164,9 +171,7 @@ def redo_invented_summaries():
     for r in store.unread_summaries_with_text():
         summary = {"no_news": False, "straight_headline": r["straight_headline"] or "",
                    "one_sentence": r["one_sentence"] or "", "bluf_bullets": r["bluf_bullets"]}
-        source = " ".join([r["original_headline"] or "", r["pub_date"] or "",
-                           r["rss_description"] or "", r["body_text"] or ""])
-        if _summary_invents(summary, source):
+        if _summary_invents(summary, _known([(r, r["body_text"] or "")])):
             redo.append(r["id"])
     store.unsummarize(redo)
     return len(redo)
@@ -202,33 +207,55 @@ _YEAR = re.compile(r"\b(?:19|20)\d\d\b")
 _AGE = re.compile(r"\b(\d{1,3})[\s-]*years?[\s-]*old\b", re.I)
 
 
-def _invented(text, source):
-    """Years and ages in `text` that `source` never mentions: a model's own
-    guesses from its training days, like "the 2024 season" in a 2026 story."""
-    text = re.sub(r"[  ]", " ", re.sub(r"[‐-―]", "-", text))
-    known = set(re.findall(r"\d+", source))
-    return ({y for y in _YEAR.findall(text) if y not in known}
-            | {f"{n}-year-old" for n in _AGE.findall(text) if n not in known})
+def _year(when):
+    try:
+        t = datetime.fromisoformat(when)
+    except (TypeError, ValueError):
+        return None
+    return str((t if t.tzinfo else t.replace(tzinfo=timezone.utc)).astimezone().year)
 
 
-def _summary_invents(summary, source):
+def _known(reports):
+    """(numbers, years) a summary may state: the numbers in the reports' own
+    titles, descriptions and text, and the years they were published (and
+    this one), which the prompt gives the model. Not the prompt's other
+    digits: "19-year-old" isn't known because it is the 19th."""
+    numbers = set()
+    for r, body in reports:
+        numbers.update(re.findall(r"\d+", " ".join(
+            [r.get("original_headline") or "", r.get("rss_description") or "", body or ""])))
+    years = {_year(r.get("pub_date")) for r, _ in reports} | {str(datetime.now().year)}
+    return numbers, years - {None}
+
+
+def _invented(text, known):
+    """Years and ages in `text` the articles never mention (`known`, from
+    _known): a model's own guesses from its training days, like "the 2024
+    season" in a 2026 story."""
+    numbers, years = known
+    text = re.sub(r"[\u00a0\u202f]", " ", re.sub(r"[\u2010-\u2015]", "-", text))
+    return ({y for y in _YEAR.findall(text) if y not in numbers and y not in years}
+            | {f"{n}-year-old" for n in _AGE.findall(text) if n not in numbers})
+
+
+def _summary_invents(summary, known):
     if summary["no_news"]:
         return set()
     return _invented(" ".join([summary["straight_headline"], summary["one_sentence"],
-                               *summary["bluf_bullets"]]), source)
+                               *summary["bluf_bullets"]]), known)
 
 
-def _without_invented(summary, source):
+def _without_invented(summary, known):
     """The summary minus the bullets that state a year or age the article
     doesn't. ValueError if the headline does, or too few bullets are left."""
-    if _invented(summary["straight_headline"], source):
+    if _invented(summary["straight_headline"], known):
         raise ValueError("headline states a date the article doesn't")
-    bullets = [b for b in summary["bluf_bullets"] if not _invented(b, source)]
+    bullets = [b for b in summary["bluf_bullets"] if not _invented(b, known)]
     if len(bullets) < 3:
         raise ValueError("summary states dates the article doesn't")
     one = summary["one_sentence"]
     return dict(summary, bluf_bullets=bullets,
-                one_sentence=bullets[0] if _invented(one, source) else one)
+                one_sentence=bullets[0] if _invented(one, known) else one)
 
 
 def _parse_summary(text):
@@ -693,12 +720,12 @@ def call_ollama(prompt, schema=SUMMARY_SCHEMA, parse=_parse_summary):
     return parse(_ollama_generate(base_url, model, prompt, schema))
 
 
-_anthropic_unsaved = [None, 0]   # [UTC day, calls that day that saved no summary]
+_anthropic_unsaved = [None, 0]   # [UTC day, paid replies that day that saved no summary]
 
 
 def _anthropic_calls_today():
     """Calls that count against the daily cap: saved summaries, plus replies
-    that were paid for but couldn't be used, and same-story questions."""
+    that were paid for but couldn't be used."""
     day = store.utc_day()
     if _anthropic_unsaved[0] != day:
         _anthropic_unsaved[:] = [day, 0]
@@ -730,13 +757,10 @@ def call_anthropic(prompt, schema=None, parse=_parse_summary):
         reply = resp.json()
         if reply.get("stop_reason") == "max_tokens":
             raise RuntimeError("reply hit the token limit")
-        result = parse(reply["content"][0]["text"])
+        return parse(reply["content"][0]["text"])
     except Exception:
         _anthropic_unsaved[1] += 1
         raise
-    if parse is not _parse_summary:   # nothing saved will count it
-        _anthropic_unsaved[1] += 1
-    return result
 
 
 _BACKENDS = {
@@ -916,9 +940,9 @@ def summarize(article, source_name, others=()):
     A summary that states a year or age the article doesn't is asked for
     again, once; bullets that still do are dropped."""
     prompt = build_prompt(article, source_name, others)
-    source = prompt[:prompt.rfind(_SUMMARY_FIELDS[:30])]   # the articles, not the instructions
+    known = _known(_reports(article, source_name, others))
     first = _route(prompt, SUMMARY_SCHEMA, _parse_summary)
-    found = _summary_invents(first[0], source)
+    found = _summary_invents(first[0], known)
     if not found:
         return first
     try:
@@ -931,11 +955,11 @@ def summarize(article, source_name, others=()):
         again = None   # the first reply, trimmed, may still do
     if again:
         _count_unsaved(first)   # the retry replaces it
-        if not _summary_invents(again[0], source):
+        if not _summary_invents(again[0], known):
             return again
     summary, provider, model = again or first
     try:
-        return _without_invented(summary, source), provider, model
+        return _without_invented(summary, known), provider, model
     except ValueError:
         _count_unsaved((summary, provider, model))
         raise
@@ -955,7 +979,7 @@ def _is_lead(article):
     return not article["story_id"] and not article["no_news"]
 
 
-def _lead_text(article_id):
+def body_to_summarize(article_id):
     """The story's row with its text in place, or None if there is nothing to
     summarize (gone, summarized meanwhile — its purged text isn't fetched again
     just to be thrown away — or no longer a card of its own). Raises
@@ -964,11 +988,6 @@ def _lead_text(article_id):
     if not article or article["processed"] or not _is_lead(article):
         return None
     return ingest.ensure_body(article_id)
-
-
-def body_to_summarize(article_id):
-    """_lead_text, run ahead of the summary, off the summary worker's thread."""
-    return _lead_text(article_id)
 
 
 def fetch_member_texts(article_id):
@@ -982,21 +1001,25 @@ def fetch_member_texts(article_id):
             except ingest.SiteDown:
                 pass
 
-
 _grouped = set()   # stories already asked about this session: a retry doesn't ask again
 
 
 def fold_related(article, keep=()):
     """Put the unread stories that come close to this one to the AI, and fold
     the ones it says are the same story into this one (never one in `keep`).
-    If no server can answer they are left as they are; Cancelled is raised."""
+    Asked of Ollama only, never Claude, like the ticker: those stories aren't
+    the one being read, so their headlines go no further than the reader's own
+    server. With Ollama off, not loaded or failing, they are left as they are.
+    Cancelled is raised."""
     if article["id"] in _grouped:
         return
     candidates = stories.fold_candidates(article, keep)
     if candidates:
+        if config.setting("ollama_role") == "off" or not ollama_ready():
+            return   # asked again if this story's summary has to be retried
         prompt = build_group_prompt(article, store.story_members(article["id"]), candidates)
         try:
-            same, _, _ = _route(prompt, GROUP_SCHEMA, _parse_group(len(candidates)))
+            same = call_ollama(prompt, GROUP_SCHEMA, _parse_group(len(candidates)))
         except Cancelled:
             raise
         except Exception as e:
@@ -1019,7 +1042,7 @@ def summarize_article(article_id, epoch=None, keep=()):
     _call.epoch = epoch
     try:
         _check_cancelled()   # before waiting on a fetch already under way
-        article = _lead_text(article_id)
+        article = body_to_summarize(article_id)
         _check_cancelled()
         if not article or article["processed"] or not _is_lead(article):
             return
