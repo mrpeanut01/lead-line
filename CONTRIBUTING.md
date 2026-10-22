@@ -25,8 +25,10 @@ leadline/
   config.py    env defaults + settings.json (user-editable at runtime)
   store.py     SQLite: articles, feed_sources; TTL purge of body text
   ingest.py    RSS poll (conditional GET) → dedup hash → extraction (stdlib HTMLParser)
+  stories.py   one card per story: groups new articles by headline similarity,
+               picks AI same-story candidates, re-leads a story when its lead goes
   ai.py        prompt + router: primary/secondary servers (Ollama, Anthropic),
-               Ollama model warm-up monitor + status
+               Ollama model warm-up monitor + status; combined, date-checked summaries
   share.py     Share button: the story as plain text for iMessage, onto the clipboard
   api.py       pywebview JS bridge — every UI capability is a method here
   app.py       entry point: background pipeline thread + window
